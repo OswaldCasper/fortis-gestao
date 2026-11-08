@@ -1,0 +1,74 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+
+    /* Cores Institucionais Padrão (Configuráveis) */
+    --fortis-primary: #C59B27;
+    --fortis-primary-hover: #B2881D;
+    --fortis-primary-light: #FBF6E7;
+    --fortis-primary-ring: rgba(197, 155, 39, 0.35);
+
+    --fortis-secondary: #0F172A;
+    --fortis-secondary-hover: #1E293B;
+
+    --fortis-tertiary: #3B82F6;
+    --fortis-tertiary-hover: #2563EB;
+
+    --background: #F8FAFC;
+    --surface: #FFFFFF;
+    --surface-muted: #F1F5F9;
+    --border: #E2E8F0;
+    --border-subtle: #F1F5F9;
+    --text-primary: #0F172A;
+    --text-secondary: #475569;
+    --text-muted: #94A3B8;
+  }
+
+  .dark {
+    --fortis-primary-light: #2A2312;
+    --background: #090D16;
+    --surface: #0F172A;
+    --surface-muted: #1E293B;
+    --border: #1E293B;
+    --border-subtle: #141E33;
+    --text-primary: #F8FAFC;
+    --text-secondary: #94A3B8;
+    --text-muted: #64748B;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--background);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* Tabular figures for data, timestamps and metrics */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 9999px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}

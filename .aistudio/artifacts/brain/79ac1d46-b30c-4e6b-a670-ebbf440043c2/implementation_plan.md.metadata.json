@@ -1,0 +1,6 @@
+{
+  "summary": "Versão final das Firestore Security Rules e arquitetura de segurança do FORTIS. Substitui a regra genérica por regras granulares por coleção, blinda o HISTORICO_AUDITORIA com bloqueio absoluto de escrita no cliente, estabelece regras específicas para PESSOAS, ORGANIZACOES e MEMBROS_ORGANIZACAO, define o processo confiável de provisionamento da organização e primeiro SuperAdmin via backend, documenta a compatibilidade de queries do Firestore (rules are not filters), define o critério unívoco de avaliação final para a Taxa de Aprovação e inclui a matriz completa de 8 testes de segurança com resultados esperados.",
+  "updatedAt": "2026-11-06T08:07:48.155064690Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
