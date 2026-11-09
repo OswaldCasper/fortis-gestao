@@ -2,11 +2,11 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  * FORTIS — Sistema Integrado de Gestão da Formação
- * CoursesView: Master-Detail split view reproduzindo e elevando o sistema AppSheet (image 4 & 9)
- * Inclui os 12 botões operacionais, gestão de sessões, presenças, avaliações, certificados e conformidade
+ * CoursesView: Master-Detail split view profissional para gestão integral de cursos
+ * Inclui os 12 botões e ações operacionais, 9 separadores estruturados, validação ISO 9001 e pauta
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   BookOpen,
   Plus,
@@ -34,10 +34,23 @@ import {
   X,
   FileCheck,
   UserPlus,
+  MoreVertical,
+  History,
+  ShieldCheck,
+  DollarSign,
+  Download,
+  AlertCircle,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
-import { Curso, EstadoCurso } from '../../types';
+import { Curso, EstadoCurso, PeriodoTurno } from '../../types';
+import {
+  Card,
+  StatusBadge,
+  DataTable,
+  EmptyState,
+  Tabs,
+} from '../ui';
 
 interface CoursesViewProps {
   initialCourseId?: string;
@@ -46,23 +59,33 @@ interface CoursesViewProps {
   onOpenTasks?: () => void;
 }
 
-export type CourseActionModal = 
-  | 'status' 
-  | 'checklist' 
-  | 'inscricoes' 
-  | 'formadores' 
-  | 'pauta' 
-  | 'ocorrencias' 
-  | 'custos' 
-  | 'avaliacoes' 
-  | 'certificados' 
-  | 'relatorio' 
-  | 'encerramento' 
-  | 'resumo_ia' 
+export type CourseActionModal =
+  | 'status'
+  | 'checklist'
+  | 'inscricoes'
+  | 'formadores'
+  | 'pauta'
+  | 'ocorrencias'
+  | 'custos'
+  | 'avaliacoes'
+  | 'certificados'
+  | 'relatorio'
+  | 'encerramento'
+  | 'resumo_ia'
   | 'novo_curso'
   | null;
 
 type ActionModal = CourseActionModal;
+type CourseTabId =
+  | 'visao_geral'
+  | 'formandos'
+  | 'formadores'
+  | 'presencas'
+  | 'avaliacoes'
+  | 'financeiro'
+  | 'qualidade'
+  | 'documentos'
+  | 'auditoria';
 
 export const CoursesView: React.FC<CoursesViewProps> = ({
   initialCourseId,
@@ -70,7 +93,7 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
   onOpenCertificates,
   onOpenTasks,
 }) => {
-  const { currentUser, currentOrg, activeRole, hasRole } = useAuth();
+  const { currentUser, currentOrg, hasRole } = useAuth();
 
   // Cursos da organização
   const [courses, setCourses] = useState(() => dataService.getCourses(currentOrg.id));
@@ -82,6 +105,24 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedYear, setSelectedYear] = useState<string>('Todos');
   const [selectedMonth, setSelectedMonth] = useState<string>('Todos');
+  const [selectedStatus, setSelectedStatus] = useState<string>('Todos');
+
+  // Separador de detalhe ativo (9 tabs)
+  const [activeTab, setActiveTab] = useState<CourseTabId>('visao_geral');
+
+  // Menu de contexto "⋯"
+  const [showContextMenu, setShowContextMenu] = useState(false);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setShowContextMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Modal de ação ativo
   const [activeModal, setActiveModal] = useState<ActionModal>(initialActionModal);
@@ -90,7 +131,7 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
   // Formulário de novo curso
   const [novoCursoForm, setNovoCursoForm] = useState({
     nomeCurso: '',
-    periodo: 'tarde' as Curso['periodo'],
+    periodo: 'tarde' as PeriodoTurno,
     localSala: 'Sala 01 - Principal',
     dataInicio: '2026-11-20',
     dataFim: '2026-12-15',
@@ -100,8 +141,8 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
     custoPrevisto: 650000,
   });
 
-  // Atualizar cursos quando o serviço notificar
-  React.useEffect(() => {
+  // Re-subscrever ao dataService
+  useEffect(() => {
     const unsub = dataService.subscribe(() => {
       setCourses(dataService.getCourses(currentOrg.id));
     });
@@ -112,15 +153,19 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
     return courses.find(c => c.id === selectedCourseId) || courses[0];
   }, [courses, selectedCourseId]);
 
-  // Filtragem da lista
+  // Filtragem da lista da coluna esquerda
   const filteredCourses = useMemo(() => {
     return courses.filter(c => {
-      const matchSearch = c.nomeCurso.toLowerCase().includes(searchTerm.toLowerCase()) || c.localSala.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchSearch =
+        c.nomeCurso.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        c.localSala.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        c.id.toLowerCase().includes(searchTerm.toLowerCase());
       const matchYear = selectedYear === 'Todos' || c.ano.toString() === selectedYear;
       const matchMonth = selectedMonth === 'Todos' || c.mes.toString() === selectedMonth;
-      return matchSearch && matchYear && matchMonth;
+      const matchStatus = selectedStatus === 'Todos' || c.estadoCurso === selectedStatus;
+      return matchSearch && matchYear && matchMonth && matchStatus;
     });
-  }, [courses, searchTerm, selectedYear, selectedMonth]);
+  }, [courses, searchTerm, selectedYear, selectedMonth, selectedStatus]);
 
   // Handlers operacionais
   const handleUpdateStatus = (novoEstado: EstadoCurso) => {
@@ -140,27 +185,30 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
 
   const handleCreateCourseSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const created = dataService.createCourse({
-      empresaId: currentOrg.id,
-      formacaoCatalogoId: 'cat-1',
-      nomeCurso: novoCursoForm.nomeCurso,
-      ano: new Date(novoCursoForm.dataInicio).getFullYear(),
-      mes: new Date(novoCursoForm.dataInicio).getMonth() + 1,
-      periodo: novoCursoForm.periodo,
-      instituicao: currentOrg.designacao,
-      localSala: novoCursoForm.localSala,
-      dataInicio: novoCursoForm.dataInicio,
-      dataFim: novoCursoForm.dataFim,
-      coordenadorId: currentUser.id,
-      vagasMaximas: Number(novoCursoForm.vagasMaximas),
-      precoInscricao: Number(novoCursoForm.precoInscricao),
-      orcamentoPrevisto: Number(novoCursoForm.orcamentoPrevisto),
-      custoPrevisto: Number(novoCursoForm.custoPrevisto),
-      estadoCurso: 'agendado',
-      encerrado: false,
-      progressoPercent: 0,
-      conformidadePercent: 80,
-    }, currentUser.id);
+    const created = dataService.createCourse(
+      {
+        empresaId: currentOrg.id,
+        formacaoCatalogoId: 'cat-1',
+        nomeCurso: novoCursoForm.nomeCurso,
+        ano: new Date(novoCursoForm.dataInicio).getFullYear(),
+        mes: new Date(novoCursoForm.dataInicio).getMonth() + 1,
+        periodo: novoCursoForm.periodo,
+        instituicao: currentOrg.designacao,
+        localSala: novoCursoForm.localSala,
+        dataInicio: novoCursoForm.dataInicio,
+        dataFim: novoCursoForm.dataFim,
+        coordenadorId: currentUser.id,
+        vagasMaximas: Number(novoCursoForm.vagasMaximas),
+        precoInscricao: Number(novoCursoForm.precoInscricao),
+        orcamentoPrevisto: Number(novoCursoForm.orcamentoPrevisto),
+        custoPrevisto: Number(novoCursoForm.custoPrevisto),
+        estadoCurso: 'agendado',
+        encerrado: false,
+        progressoPercent: 0,
+        conformidadePercent: 80,
+      },
+      currentUser.id
+    );
 
     setSelectedCourseId(created.id);
     setActiveModal(null);
@@ -197,6 +245,42 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
     return selectedCourse ? dataService.getCourseSessions(selectedCourse.id) : [];
   }, [selectedCourse]);
 
+  const ocorrenciasCurso = useMemo(() => {
+    return selectedCourse ? dataService.getOccurrences(currentOrg.id, selectedCourse.id) : [];
+  }, [selectedCourse, currentOrg.id]);
+
+  const auditoriaCurso = useMemo(() => {
+    return selectedCourse
+      ? dataService.getAuditHistory(currentOrg.id).filter(a => a.entidadeId === selectedCourse.id)
+      : [];
+  }, [selectedCourse, currentOrg.id]);
+
+  // Helper de badges
+  const getBadgeVariant = (estado: EstadoCurso): 'success' | 'warning' | 'info' | 'neutral' => {
+    switch (estado) {
+      case 'realizado':
+        return 'success';
+      case 'em_andamento':
+        return 'info';
+      case 'agendado':
+        return 'warning';
+      default:
+        return 'neutral';
+    }
+  };
+
+  const courseTabs = [
+    { id: 'visao_geral', label: 'Visão Geral', count: tarefasCurso.filter(t => t.estado !== 'concluida').length || undefined },
+    { id: 'formandos', label: 'Formandos', count: inscricoesCurso.length },
+    { id: 'formadores', label: 'Formadores', count: formadoresCurso.length },
+    { id: 'presencas', label: 'Presenças', count: sessoesCurso.length },
+    { id: 'avaliacoes', label: 'Avaliações', count: avaliacoesCurso.length },
+    { id: 'financeiro', label: 'Financeiro', count: financasCurso.length },
+    { id: 'qualidade', label: 'Qualidade', count: ocorrenciasCurso.length },
+    { id: 'documentos', label: 'Documentos', count: certificadosCurso.length },
+    { id: 'auditoria', label: 'Auditoria' },
+  ];
+
   return (
     <div className="space-y-4 pb-12 animate-in fade-in duration-200">
       {/* Feedback Toast */}
@@ -212,12 +296,12 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
       {/* Grid Principal Master-Detail (Split View) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         
-        {/* COLUNA ESQUERDA: LISTA DE CURSOS COM ARVORE TEMPORAL (4 Colunas) */}
-        <div className="lg:col-span-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 space-y-4 shadow-xs">
+        {/* COLUNA ESQUERDA: LISTA DE CURSOS (~340px / 4 colunas) */}
+        <div className="lg:col-span-4 bg-white dark:bg-[#152232] rounded-xl border border-[#E3E8EF] dark:border-[#223347] p-3.5 space-y-3 shadow-xs">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <BookOpen size={16} style={{ color: 'var(--fortis-primary)' }} />
-              <span>Cursos ({filteredCourses.length})</span>
+            <h2 className="text-sm font-bold text-[#1B2A3A] dark:text-[#F1F5F9] flex items-center gap-2">
+              <BookOpen size={16} className="text-[var(--fortis-primary)]" />
+              <span>Cursos Agendados ({filteredCourses.length})</span>
             </h2>
 
             {hasRole(['superadmin_org', 'admin', 'gestor']) && (
@@ -239,322 +323,750 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
               type="text"
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              placeholder="Procurar cursos..."
-              className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
+              placeholder="Procurar curso, sala ou código..."
+              className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9] focus:outline-none focus:ring-1 focus:ring-[var(--fortis-primary)] font-medium"
             />
           </div>
 
-          {/* Árvore de Filtros Temporais (matching screenshot image 4: 2026, 2004, Meses) */}
-          <div className="flex items-center gap-2 text-xs">
-            <button
-              onClick={() => { setSelectedYear('Todos'); setSelectedMonth('Todos'); }}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all ${
-                selectedYear === 'Todos' ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300' : 'text-slate-500 hover:bg-slate-100'
-              }`}
+          {/* Filtros compactos: Ano, Mês e Estado */}
+          <div className="grid grid-cols-3 gap-1.5 text-xs">
+            <select
+              value={selectedYear}
+              onChange={e => setSelectedYear(e.target.value)}
+              className="py-1 px-1.5 text-[11px] rounded-md border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
             >
-              Todos
-            </button>
-            <button
-              onClick={() => setSelectedYear('2026')}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all ${
-                selectedYear === '2026' ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300' : 'text-slate-500 hover:bg-slate-100'
-              }`}
+              <option value="Todos">Ano: Todos</option>
+              <option value="2026">2026</option>
+              <option value="2025">2025</option>
+              <option value="2004">2004</option>
+            </select>
+
+            <select
+              value={selectedMonth}
+              onChange={e => setSelectedMonth(e.target.value)}
+              className="py-1 px-1.5 text-[11px] rounded-md border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
             >
-              2026 ({courses.filter(c => c.ano === 2026).length})
-            </button>
-            <button
-              onClick={() => setSelectedYear('2025')}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all ${
-                selectedYear === '2025' ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300' : 'text-slate-500 hover:bg-slate-100'
-              }`}
+              <option value="Todos">Mês: Todos</option>
+              <option value="1">Jan</option>
+              <option value="2">Fev</option>
+              <option value="3">Mar</option>
+              <option value="4">Abr</option>
+              <option value="5">Mai</option>
+              <option value="6">Jun</option>
+              <option value="7">Jul</option>
+              <option value="8">Ago</option>
+              <option value="9">Set</option>
+              <option value="10">Out</option>
+              <option value="11">Nov</option>
+              <option value="12">Dez</option>
+            </select>
+
+            <select
+              value={selectedStatus}
+              onChange={e => setSelectedStatus(e.target.value)}
+              className="py-1 px-1.5 text-[11px] rounded-md border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
             >
-              Histórico
-            </button>
+              <option value="Todos">Estado: Todos</option>
+              <option value="agendado">Agendado</option>
+              <option value="em_andamento">Em Andamento</option>
+              <option value="realizado">Realizado</option>
+              <option value="cancelado">Cancelado</option>
+            </select>
           </div>
 
-          {/* Lista de Cartões de Curso (Estilo AppSheet moderno) */}
-          <div className="space-y-2.5 max-h-[700px] overflow-y-auto pr-1">
-            {filteredCourses.map(curso => {
-              const isSelected = selectedCourse?.id === curso.id;
+          {/* Lista de Cartões de Curso */}
+          <div className="space-y-2 max-h-[720px] overflow-y-auto pr-1">
+            {filteredCourses.length === 0 ? (
+              <p className="text-xs text-center py-6 text-[#5B6B7C]">Nenhum curso encontrado.</p>
+            ) : (
+              filteredCourses.map(curso => {
+                const isSelected = selectedCourse?.id === curso.id;
 
-              return (
-                <div
-                  key={curso.id}
-                  onClick={() => setSelectedCourseId(curso.id)}
-                  className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
-                    isSelected
-                      ? 'border-amber-400 bg-amber-50/40 dark:bg-amber-950/20 shadow-xs ring-1 ring-amber-400/40'
-                      : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-850'
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    {/* Indicador Circular de Progresso */}
-                    <div className="relative w-10 h-10 shrink-0 flex items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[10px] font-bold text-slate-700 dark:text-slate-300 tabular-nums">
-                      {curso.progressoPercent}%
+                return (
+                  <div
+                    key={curso.id}
+                    onClick={() => setSelectedCourseId(curso.id)}
+                    className={`p-3 rounded-xl border transition-all cursor-pointer space-y-2 ${
+                      isSelected
+                        ? 'border-[var(--fortis-primary)] bg-[var(--fortis-primary-soft)] shadow-xs ring-1 ring-[var(--fortis-primary)]'
+                        : 'border-[#E3E8EF] dark:border-[#223347] hover:border-slate-300 dark:hover:border-slate-600 bg-white dark:bg-[#152232]'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <span className="font-mono text-[10px] font-bold text-[#5B6B7C] dark:text-[#94A3B8] block">
+                          {curso.id.toUpperCase()}
+                        </span>
+                        <p className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] truncate">
+                          {curso.nomeCurso}
+                        </p>
+                      </div>
+                      <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-[10px] font-bold tabular-nums shrink-0">
+                        {curso.progressoPercent}%
+                      </div>
                     </div>
 
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
-                        {curso.nomeCurso}
-                      </p>
-                      <p className="text-[11px] text-slate-400 capitalize mt-0.5">
-                        Turno da {curso.periodo} · {curso.localSala}
-                      </p>
-                      <p className="text-[10px] text-slate-400 mt-1">
-                        {curso.dataInicio} a {curso.dataFim}
-                      </p>
+                    <div className="text-[11px] text-[#5B6B7C] dark:text-[#94A3B8] space-y-0.5">
+                      <p className="capitalize">Turno da {curso.periodo} · {curso.localSala}</p>
+                      <p className="font-mono text-[10px]">{curso.dataInicio} a {curso.dataFim}</p>
+                    </div>
+
+                    <div className="pt-2 border-t border-[#E3E8EF]/60 dark:border-[#223347]/60 flex items-center justify-between text-[11px]">
+                      {/* Badge independente de Estado do Curso */}
+                      <StatusBadge variant={getBadgeVariant(curso.estadoCurso)}>
+                        {curso.estadoCurso.replace('_', ' ')}
+                      </StatusBadge>
+
+                      {/* Badge independente e explícito de Encerramento */}
+                      {curso.encerrado ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#16866A] dark:text-[#20A785] bg-[#E8F5F1] dark:bg-[#0C3328] px-2 py-0.5 rounded">
+                          <Lock size={10} /> Encerrado
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-[#5B6B7C] font-medium">
+                          Em Aberto
+                        </span>
+                      )}
                     </div>
                   </div>
-
-                  <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-[11px]">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
-                      curso.estadoCurso === 'realizado' ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300' :
-                      curso.estadoCurso === 'em_andamento' ? 'bg-blue-100 dark:bg-blue-950/40 text-blue-800 dark:text-blue-300' :
-                      curso.estadoCurso === 'agendado' ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300' :
-                      'bg-red-100 text-red-800'
-                    }`}>
-                      {curso.estadoCurso.replace('_', ' ')}
-                    </span>
-
-                    {curso.encerrado && (
-                      <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                        <Lock size={10} /> Encerrado
-                      </span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
 
-        {/* COLUNA DIREITA: DETALHES DA AÇÃO (8 Colunas - Matching image_5324eb41.png) */}
+        {/* COLUNA DIREITA: DETALHE DO CURSO (8 Colunas) */}
         {selectedCourse ? (
-          <div className="lg:col-span-8 space-y-5">
-            {/* Cabeçalho do Detalhe da Ação */}
-            <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
-                <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                    Detalhes da Ação de Formação
-                  </span>
-                  <h1 className="text-lg md:text-xl font-bold text-slate-900 dark:text-slate-100 mt-0.5">
+          <div className="lg:col-span-8 space-y-4">
+            
+            {/* Cabeçalho Fixo do Detalhe */}
+            <Card padding="md" className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-[#E3E8EF] dark:border-[#223347]">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[#5B6B7C] dark:text-[#94A3B8]">
+                      {selectedCourse.id.toUpperCase()}
+                    </span>
+                    <StatusBadge variant={getBadgeVariant(selectedCourse.estadoCurso)}>
+                      {selectedCourse.estadoCurso.replace('_', ' ')}
+                    </StatusBadge>
+                    {selectedCourse.encerrado ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-bold text-[#16866A] dark:text-[#20A785] bg-[#E8F5F1] dark:bg-[#0C3328] px-2.5 py-0.5 rounded">
+                        <Lock size={12} /> Encerrado Formalmente
+                      </span>
+                    ) : (
+                      <span className="text-xs text-[#5B6B7C] font-medium bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">
+                        Processo em Aberto
+                      </span>
+                    )}
+                  </div>
+                  <h1 className="text-lg md:text-xl font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
                     {selectedCourse.nomeCurso}
                   </h1>
                 </div>
 
-                <div className="flex items-center gap-2">
+                {/* Ações Rápidas & Menu Contextual "⋯" */}
+                <div className="flex items-center gap-2 shrink-0">
                   <button
                     onClick={() => setActiveModal('certificados')}
-                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 text-white hover:bg-amber-700 shadow-xs flex items-center gap-1.5 transition-colors"
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg text-white shadow-xs flex items-center gap-1.5 transition-colors"
+                    style={{ backgroundColor: 'var(--fortis-secondary)' }}
                   >
                     <Award size={14} />
-                    <span>Gerar Certificados</span>
+                    <span>Certificados</span>
                   </button>
 
-                  <button
-                    onClick={handleToggleClosure}
-                    title={selectedCourse.encerrado ? 'Reabrir Ação' : 'Encerrar Formalmente'}
-                    className={`p-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1 transition-colors ${
-                      selectedCourse.encerrado
-                        ? 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
-                        : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100'
-                    }`}
-                  >
-                    {selectedCourse.encerrado ? <Lock size={14} /> : <Unlock size={14} />}
-                    <span>{selectedCourse.encerrado ? 'Encerrado' : 'Encerrar'}</span>
-                  </button>
+                  <div className="relative" ref={contextMenuRef}>
+                    <button
+                      onClick={() => setShowContextMenu(v => !v)}
+                      className="p-1.5 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232] text-[#5B6B7C] hover:text-[#1B2A3A] transition-colors"
+                      title="Operações do Curso"
+                    >
+                      <MoreVertical size={16} />
+                    </button>
+
+                    {showContextMenu && (
+                      <div className="absolute right-0 top-full mt-1.5 w-56 p-1.5 bg-white dark:bg-[#152232] border border-[#E3E8EF] dark:border-[#223347] rounded-xl shadow-xl z-30 text-xs space-y-0.5">
+                        <button
+                          onClick={() => { setActiveModal('status'); setShowContextMenu(false); }}
+                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 text-[#1B2A3A] dark:text-[#F1F5F9]"
+                        >
+                          <Clock size={14} className="text-blue-500" />
+                          <span>Atualizar Estado</span>
+                        </button>
+
+                        <button
+                          onClick={() => { handleToggleClosure(); setShowContextMenu(false); }}
+                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 text-[#1B2A3A] dark:text-[#F1F5F9]"
+                        >
+                          {selectedCourse.encerrado ? (
+                            <>
+                              <Unlock size={14} className="text-emerald-500" />
+                              <span>Reabrir Curso</span>
+                            </>
+                          ) : (
+                            <>
+                              <Lock size={14} className="text-amber-500" />
+                              <span>Encerrar Formalmente</span>
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          onClick={() => { setActiveModal('inscricoes'); setShowContextMenu(false); }}
+                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 text-[#1B2A3A] dark:text-[#F1F5F9]"
+                        >
+                          <UserPlus size={14} className="text-indigo-500" />
+                          <span>Adicionar Inscrição</span>
+                        </button>
+
+                        <button
+                          onClick={() => { setActiveModal('formadores'); setShowContextMenu(false); }}
+                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 text-[#1B2A3A] dark:text-[#F1F5F9]"
+                        >
+                          <GraduationCap size={14} className="text-blue-500" />
+                          <span>Atribuir Formador</span>
+                        </button>
+
+                        <button
+                          onClick={() => { setActiveModal('ocorrencias'); setShowContextMenu(false); }}
+                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 text-[#1B2A3A] dark:text-[#F1F5F9]"
+                        >
+                          <AlertTriangle size={14} className="text-amber-500" />
+                          <span>Registar Ocorrência</span>
+                        </button>
+
+                        <button
+                          onClick={() => { setActiveModal('custos'); setShowContextMenu(false); }}
+                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 text-[#1B2A3A] dark:text-[#F1F5F9]"
+                        >
+                          <Wallet size={14} className="text-rose-500" />
+                          <span>Registar Custo / Despesa</span>
+                        </button>
+
+                        <button
+                          onClick={() => { setActiveModal('resumo_ia'); setShowContextMenu(false); }}
+                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 text-[#1B2A3A] dark:text-[#F1F5F9]"
+                        >
+                          <Sparkles size={14} className="text-[var(--fortis-secondary)]" />
+                          <span>Síntese da Formação</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              {/* Informações Básicas Rápidas */}
+              {/* Informações Resumo Rápidas */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60">
-                  <span className="text-[10px] text-slate-400 block">Datas</span>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200 tabular-nums">
+                <div className="p-2.5 rounded-lg bg-[#F4F6F9] dark:bg-[#0B111B]">
+                  <span className="text-[10px] text-[#5B6B7C] block font-medium">Datas</span>
+                  <span className="font-semibold text-[#1B2A3A] dark:text-[#F1F5F9] font-mono tabular-nums">
                     {selectedCourse.dataInicio} a {selectedCourse.dataFim}
                   </span>
                 </div>
-                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60">
-                  <span className="text-[10px] text-slate-400 block">Horário / Local</span>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200 capitalize">
+                <div className="p-2.5 rounded-lg bg-[#F4F6F9] dark:bg-[#0B111B]">
+                  <span className="text-[10px] text-[#5B6B7C] block font-medium">Turno / Sala</span>
+                  <span className="font-semibold text-[#1B2A3A] dark:text-[#F1F5F9] capitalize truncate block">
                     {selectedCourse.periodo} · {selectedCourse.localSala}
                   </span>
                 </div>
-                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60">
-                  <span className="text-[10px] text-slate-400 block">Inscrições / Vagas</span>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200 tabular-nums">
+                <div className="p-2.5 rounded-lg bg-[#F4F6F9] dark:bg-[#0B111B]">
+                  <span className="text-[10px] text-[#5B6B7C] block font-medium">Inscrições / Vagas</span>
+                  <span className="font-semibold text-[#1B2A3A] dark:text-[#F1F5F9] tabular-nums font-mono">
                     {inscricoesCurso.length} / {selectedCourse.vagasMaximas}
                   </span>
                 </div>
-                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60">
-                  <span className="text-[10px] text-slate-400 block">Orçamento Previsto</span>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200 tabular-nums">
+                <div className="p-2.5 rounded-lg bg-[#F4F6F9] dark:bg-[#0B111B]">
+                  <span className="text-[10px] text-[#5B6B7C] block font-medium">Orçamento Previsto</span>
+                  <span className="font-semibold text-[#1B2A3A] dark:text-[#F1F5F9] tabular-nums font-mono">
                     {selectedCourse.orcamentoPrevisto.toLocaleString()} Kz
                   </span>
                 </div>
               </div>
 
-              {/* OS 12 BOTÕES OPERACIONAIS (Fiel ao AppSheet image 9: CUSSI_FORTIS) */}
-              <div className="pt-2">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-3">
-                  Operações da Ação
-                </span>
-
-                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2.5 text-center">
-                  {[
-                    { id: 'status' as ActionModal, label: 'Atualizar Status', icon: Clock, count: null },
-                    { id: 'checklist' as ActionModal, label: 'Checklist', icon: CheckSquare, count: tarefasCurso.length },
-                    { id: 'inscricoes' as ActionModal, label: 'Inscrições', icon: Users, count: inscricoesCurso.length },
-                    { id: 'formadores' as ActionModal, label: 'Formadores', icon: GraduationCap, count: formadoresCurso.length },
-                    { id: 'pauta' as ActionModal, label: 'Pauta', icon: FileText, count: sessoesCurso.length },
-                    { id: 'ocorrencias' as ActionModal, label: 'Ocorrências', icon: AlertTriangle, count: null },
-                    { id: 'custos' as ActionModal, label: 'Custos', icon: Wallet, count: null },
-                    { id: 'avaliacoes' as ActionModal, label: 'Avaliações', icon: Award, count: avaliacoesCurso.length },
-                    { id: 'certificados' as ActionModal, label: 'Certificados', icon: Award, count: certificadosCurso.length },
-                    { id: 'relatorio' as ActionModal, label: 'Relatório', icon: FileCheck, count: null },
-                    { id: 'encerramento' as ActionModal, label: 'Finalizar', icon: Lock, count: null },
-                    { id: 'resumo_ia' as ActionModal, label: 'Resumo de IA', icon: Sparkles, count: null },
-                  ].map(btn => {
-                    const Icon = btn.icon;
-
-                    return (
-                      <button
-                        key={btn.id}
-                        onClick={() => setActiveModal(btn.id)}
-                        className="flex flex-col items-center justify-center p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-850 hover:border-amber-400 hover:shadow-xs transition-all group cursor-pointer"
-                      >
-                        <div 
-                          className="w-9 h-9 rounded-full flex items-center justify-center text-white mb-2 shadow-xs group-hover:scale-105 transition-transform"
-                          style={{ backgroundColor: 'var(--fortis-primary)' }}
-                        >
-                          <Icon size={16} />
-                        </div>
-                        <span className="text-[11px] font-semibold text-slate-800 dark:text-slate-200 line-clamp-1">
-                          {btn.label}
-                        </span>
-                        {btn.count !== null && (
-                          <span className="text-[9px] text-slate-400 font-bold tabular-nums">
-                            {btn.count} registos
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* BARRAS DE STATUS E CONFORMIDADE DO CURSO (Matching image 9) */}
-              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-4">
-                <div>
-                  <div className="flex justify-between text-xs font-semibold mb-1.5">
-                    <span className="text-slate-700 dark:text-slate-300">Status do Curso</span>
-                    <span className="capitalize text-amber-600 dark:text-amber-400">
-                      {selectedCourse.estadoCurso.replace('_', ' ')} ({selectedCourse.progressoPercent}%)
-                    </span>
+              {/* Barras de Progresso e Conformidade ISO */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs font-semibold">
+                    <span className="text-[#5B6B7C]">Progresso Pedagógico</span>
+                    <span className="tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">{selectedCourse.progressoPercent}%</span>
                   </div>
-                  <div className="w-full h-3 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                  <div className="w-full h-2 rounded-full bg-[#E3E8EF] dark:bg-[#223347] overflow-hidden">
                     <div
                       className="h-full rounded-full transition-all duration-500"
                       style={{
-                        width: `${Math.max(8, selectedCourse.progressoPercent)}%`,
+                        width: `${Math.max(5, selectedCourse.progressoPercent)}%`,
                         backgroundColor: 'var(--fortis-primary)',
                       }}
                     />
                   </div>
                 </div>
 
-                <div>
-                  <div className="flex justify-between text-xs font-semibold mb-1.5">
-                    <span className="text-slate-700 dark:text-slate-300">Conformidade do Curso (ISO 9001)</span>
-                    <span className="tabular-nums" style={{ color: selectedCourse.conformidadePercent >= 90 ? '#10B981' : '#F59E0B' }}>
-                      {selectedCourse.conformidadePercent}% concluído
-                    </span>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs font-semibold">
+                    <span className="text-[#5B6B7C]">Conformidade ISO 9001</span>
+                    <span className="tabular-nums text-[#16866A]">{selectedCourse.conformidadePercent}%</span>
                   </div>
-                  <div className="w-full h-3 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                  <div className="w-full h-2 rounded-full bg-[#E3E8EF] dark:bg-[#223347] overflow-hidden">
                     <div
-                      className="h-full rounded-full transition-all duration-500"
-                      style={{
-                        width: `${selectedCourse.conformidadePercent}%`,
-                        backgroundColor: selectedCourse.conformidadePercent >= 90 ? '#10B981' : '#F59E0B',
-                      }}
+                      className="h-full rounded-full bg-[#16866A] transition-all duration-500"
+                      style={{ width: `${selectedCourse.conformidadePercent}%` }}
                     />
                   </div>
                 </div>
               </div>
-            </div>
 
-            {/* SEPARADOR INFORMATIVO: FORMADORES & FORMANDOS ALOCADOS */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Formadores Alocados */}
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                    <GraduationCap size={14} className="text-blue-500" />
-                    <span>Formadores Atribuídos ({formadoresCurso.length})</span>
-                  </span>
-                  <button 
-                    onClick={() => setActiveModal('formadores')}
-                    className="text-[11px] text-amber-600 font-semibold hover:underline"
-                  >
-                    Gerir
-                  </button>
+              {/* 9 Separadores Estruturados */}
+              <Tabs
+                tabs={courseTabs}
+                activeTab={activeTab}
+                onChange={id => setActiveTab(id as CourseTabId)}
+              />
+            </Card>
+
+            {/* CONTEÚDO DO SEPARADOR ATIVO */}
+            <div className="space-y-4">
+              
+              {/* TAB 1: VISÃO GERAL */}
+              {activeTab === 'visao_geral' && (
+                <div className="space-y-4">
+                  {/* Card Checklist de Tarefas do Curso */}
+                  <Card padding="md" className="space-y-3">
+                    <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+                      <div>
+                        <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] flex items-center gap-1.5">
+                          <CheckSquare size={14} className="text-[var(--fortis-primary)]" />
+                          <span>Checklist & Requisitos ISO 9001 da Ação</span>
+                        </h3>
+                        <p className="text-[11px] text-[#5B6B7C]">Tarefas obrigatórias para o fecho formal administrativo</p>
+                      </div>
+                      <span className="text-xs font-mono font-bold text-[#16866A]">
+                        {tarefasCurso.filter(t => t.estado === 'concluida').length} / {tarefasCurso.length} concluídas
+                      </span>
+                    </div>
+
+                    <div className="space-y-2">
+                      {tarefasCurso.length === 0 ? (
+                        <p className="text-xs text-center py-4 text-[#5B6B7C]">Sem tarefas associadas a este curso.</p>
+                      ) : (
+                        tarefasCurso.map(tar => (
+                          <div
+                            key={tar.id}
+                            onClick={() => dataService.toggleTaskState(tar.id, currentUser.id)}
+                            className="p-2.5 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60 flex items-start gap-2.5 cursor-pointer hover:border-[var(--fortis-primary)] transition-all"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={tar.estado === 'concluida'}
+                              onChange={() => {}}
+                              className="mt-0.5 rounded text-[var(--fortis-primary)] focus:ring-[var(--fortis-primary)]"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-xs font-semibold ${tar.estado === 'concluida' ? 'line-through text-slate-400' : 'text-[#1B2A3A] dark:text-[#F1F5F9]'}`}>
+                                {tar.titulo}
+                              </p>
+                              <p className="text-[11px] text-[#5B6B7C] line-clamp-1">{tar.descricao}</p>
+                              <div className="flex items-center gap-2 mt-1 text-[10px]">
+                                <span className="font-mono text-[#5B6B7C]">Prazo: {tar.dataLimite}</span>
+                                <span className="text-[#5B6B7C]">·</span>
+                                <span className={`font-semibold ${tar.grupoTemporal === 'Em Atraso' ? 'text-[#D32F2F]' : 'text-[#D99B24]'}`}>
+                                  {tar.grupoTemporal}
+                                </span>
+                                {tar.obrigatoriaParaEncerramento && (
+                                  <span className="px-1.5 py-0.2 rounded bg-rose-50 text-rose-600 font-bold">
+                                    Obrigatória ISO
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </Card>
                 </div>
-                <div className="space-y-2">
-                  {formadoresCurso.length > 0 ? (
-                    formadoresCurso.map(f => (
-                      <div key={f.id} className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 flex items-center justify-between text-xs">
-                        <div>
-                          <p className="font-semibold text-slate-900 dark:text-slate-100">{f.pessoa.nomeCompleto}</p>
-                          <p className="text-[10px] text-slate-400 capitalize">{f.papelFormacao.replace('_', ' ')} · {f.horasAtribuidas}h</p>
+              )}
+
+              {/* TAB 2: FORMANDOS */}
+              {activeTab === 'formandos' && (
+                <Card padding="md" className="space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+                    <div>
+                      <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                        Formandos Inscritos ({inscricoesCurso.length}/{selectedCourse.vagasMaximas})
+                      </h3>
+                      <p className="text-[11px] text-[#5B6B7C]">Pessoas singulares admitidas à turma</p>
+                    </div>
+                    <button
+                      onClick={() => setActiveModal('inscricoes')}
+                      className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-[var(--fortis-primary)] text-white hover:opacity-90 flex items-center gap-1"
+                    >
+                      <UserPlus size={13} />
+                      <span>Inscrever Formando</span>
+                    </button>
+                  </div>
+
+                  <DataTable>
+                    <thead className="bg-[#F4F6F9] dark:bg-[#0B111B] text-[#5B6B7C] font-semibold border-b border-[#E3E8EF] dark:border-[#223347]">
+                      <tr>
+                        <th className="py-2 px-3">Formando</th>
+                        <th className="py-2 px-3">Contacto</th>
+                        <th className="py-2 px-3">Valor Pago</th>
+                        <th className="py-2 px-3">Data Inscrição</th>
+                        <th className="py-2 px-3">Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E3E8EF] dark:divide-[#223347] text-xs">
+                      {inscricoesCurso.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="py-6 text-center text-[#5B6B7C]">
+                            Nenhum formando inscrito nesta turma.
+                          </td>
+                        </tr>
+                      ) : (
+                        inscricoesCurso.map(i => (
+                          <tr key={i.id}>
+                            <td className="py-2.5 px-3 font-semibold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                              {i.formando.nomeCompleto}
+                            </td>
+                            <td className="py-2.5 px-3 text-[#5B6B7C]">{i.formando.email}</td>
+                            <td className="py-2.5 px-3 font-mono font-semibold tabular-nums text-[#16866A]">
+                              {i.valorPago.toLocaleString()} Kz
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-[11px]">{new Date(i.dataInscricao).toLocaleDateString()}</td>
+                            <td className="py-2.5 px-3">
+                              <StatusBadge variant="success">Confirmado</StatusBadge>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </DataTable>
+                </Card>
+              )}
+
+              {/* TAB 3: FORMADORES */}
+              {activeTab === 'formadores' && (
+                <Card padding="md" className="space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+                    <div>
+                      <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                        Corpo Docente Atribuído ({formadoresCurso.length})
+                      </h3>
+                      <p className="text-[11px] text-[#5B6B7C]">Formadores credenciados e respetivas cargas horárias</p>
+                    </div>
+                    <button
+                      onClick={() => setActiveModal('formadores')}
+                      className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-[var(--fortis-primary)] text-white hover:opacity-90 flex items-center gap-1"
+                    >
+                      <Plus size={13} />
+                      <span>Atribuir Formador</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {formadoresCurso.length === 0 ? (
+                      <p className="text-xs text-[#5B6B7C] py-4 col-span-2 text-center">Nenhum formador associado.</p>
+                    ) : (
+                      formadoresCurso.map(f => (
+                        <div key={f.id} className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/50 dark:bg-[#0B111B]/50 flex items-center justify-between">
+                          <div>
+                            <p className="font-bold text-xs text-[#1B2A3A] dark:text-[#F1F5F9]">{f.pessoa.nomeCompleto}</p>
+                            <p className="text-[11px] text-[#5B6B7C] capitalize">{f.papelFormacao.replace('_', ' ')} · {f.horasAtribuidas} horas</p>
+                            <p className="text-[10px] text-[#5B6B7C]">{f.pessoa.email}</p>
+                          </div>
+                          <span className="font-mono text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                            {f.honorarioAcordado.toLocaleString()} Kz
+                          </span>
                         </div>
-                        <span className="text-[10px] tabular-nums font-bold text-slate-700 dark:text-slate-300">
-                          {f.honorarioAcordado.toLocaleString()} Kz
+                      ))
+                    )}
+                  </div>
+                </Card>
+              )}
+
+              {/* TAB 4: PRESENÇAS / PAUTA */}
+              {activeTab === 'presencas' && (
+                <Card padding="md" className="space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+                    <div>
+                      <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                        Sessões Calendarizadas & Folha de Pauta
+                      </h3>
+                      <p className="text-[11px] text-[#5B6B7C]">Registo de assiduidade por sessão</p>
+                    </div>
+                    <button
+                      onClick={() => setActiveModal('pauta')}
+                      className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-[var(--fortis-primary)] text-white hover:opacity-90 flex items-center gap-1"
+                    >
+                      <Printer size={13} />
+                      <span>Abrir Pauta</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {sessoesCurso.length === 0 ? (
+                      <EmptyState
+                        icon={Calendar}
+                        title="Sem sessões registadas"
+                        description="Agende a primeira sessão na opção Pauta do menu de operações."
+                      />
+                    ) : (
+                      sessoesCurso.map(ses => (
+                        <div key={ses.id} className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60 flex items-center justify-between text-xs">
+                          <div>
+                            <span className="font-bold text-[#D99B24]">Sessão {ses.numeroSessao}</span>
+                            <span className="font-mono text-[#5B6B7C] ml-2">{ses.data} ({ses.horaInicio} às {ses.horaFim})</span>
+                            <p className="text-[#1B2A3A] dark:text-[#F1F5F9] font-medium mt-0.5">{ses.sumarioTopicos}</p>
+                          </div>
+                          <StatusBadge variant="success">{ses.estadoSessao}</StatusBadge>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </Card>
+              )}
+
+              {/* TAB 5: AVALIAÇÕES */}
+              {activeTab === 'avaliacoes' && (
+                <Card padding="md" className="space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+                    <div>
+                      <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                        Resultados das Avaliações Pedagógicas
+                      </h3>
+                      <p className="text-[11px] text-[#5B6B7C]">Notas de conhecimentos e satisfação com desduplicação por formando</p>
+                    </div>
+                  </div>
+
+                  <DataTable>
+                    <thead className="bg-[#F4F6F9] dark:bg-[#0B111B] text-[#5B6B7C] font-semibold border-b border-[#E3E8EF] dark:border-[#223347]">
+                      <tr>
+                        <th className="py-2 px-3">Tipo de Avaliação</th>
+                        <th className="py-2 px-3">Nota</th>
+                        <th className="py-2 px-3">Escala</th>
+                        <th className="py-2 px-3">Resultado</th>
+                        <th className="py-2 px-3">Final?</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E3E8EF] dark:divide-[#223347] text-xs">
+                      {avaliacoesCurso.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="py-6 text-center text-[#5B6B7C]">
+                            Sem registos de avaliação lançados para esta ação.
+                          </td>
+                        </tr>
+                      ) : (
+                        avaliacoesCurso.map(a => (
+                          <tr key={a.id}>
+                            <td className="py-2.5 px-3 capitalize font-medium text-[#1B2A3A] dark:text-[#F1F5F9]">
+                              {a.tipoAvaliacao.replace('_', ' ')}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono font-bold tabular-nums">
+                              {a.notaNumerica}
+                            </td>
+                            <td className="py-2.5 px-3 text-[#5B6B7C]">{a.escala.replace('_', ' ')}</td>
+                            <td className="py-2.5 px-3">
+                              <StatusBadge variant={a.resultado === 'aprovado' ? 'success' : a.resultado === 'reprovado' ? 'danger' : 'neutral'}>
+                                {a.resultado}
+                              </StatusBadge>
+                            </td>
+                            <td className="py-2.5 px-3 font-semibold text-[#16866A]">
+                              {a.eAvaliacaoFinal ? 'Sim (Auditada)' : 'Intercalar'}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </DataTable>
+                </Card>
+              )}
+
+              {/* TAB 6: FINANCEIRO */}
+              {activeTab === 'financeiro' && (
+                <Card padding="md" className="space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+                    <div>
+                      <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                        Controlo Financeiro da Ação
+                      </h3>
+                      <p className="text-[11px] text-[#5B6B7C]">Orçamento vs Custos reais incorridos</p>
+                    </div>
+                    <button
+                      onClick={() => setActiveModal('custos')}
+                      className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-[var(--fortis-primary)] text-white hover:opacity-90 flex items-center gap-1"
+                    >
+                      <Plus size={13} />
+                      <span>Registar Custo</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 pb-2">
+                    <div className="p-3 rounded-lg bg-[#F4F6F9] dark:bg-[#0B111B]">
+                      <span className="text-[11px] text-[#5B6B7C] block">Orçamento Previsto</span>
+                      <span className="text-base font-bold font-mono tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">
+                        {selectedCourse.orcamentoPrevisto.toLocaleString()} Kz
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-[#F4F6F9] dark:bg-[#0B111B]">
+                      <span className="text-[11px] text-[#5B6B7C] block">Custo Estimado</span>
+                      <span className="text-base font-bold font-mono tabular-nums text-[#D32F2F]">
+                        {selectedCourse.custoPrevisto.toLocaleString()} Kz
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    {financasCurso.map(f => (
+                      <div key={f.id} className="p-2.5 rounded-lg border border-[#E3E8EF] dark:border-[#223347] flex items-center justify-between text-xs">
+                        <div>
+                          <p className="font-semibold text-[#1B2A3A] dark:text-[#F1F5F9]">{f.descricao}</p>
+                          <p className="text-[10px] text-[#5B6B7C]">{f.data} · {f.categoria.replace('_', ' ')}</p>
+                        </div>
+                        <span className={`font-mono font-bold ${f.tipo === 'receita' ? 'text-[#16866A]' : 'text-[#D32F2F]'}`}>
+                          {f.tipo === 'receita' ? '+' : '-'}{f.valor.toLocaleString()} Kz
                         </span>
                       </div>
-                    ))
-                  ) : (
-                    <p className="text-xs text-slate-400 py-2">Nenhum formador associado a esta ação.</p>
-                  )}
-                </div>
-              </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
 
-              {/* Formandos Inscritos */}
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                    <Users size={14} className="text-indigo-500" />
-                    <span>Formandos Inscritos ({inscricoesCurso.length})</span>
-                  </span>
-                  <button 
-                    onClick={() => setActiveModal('inscricoes')}
-                    className="text-[11px] text-amber-600 font-semibold hover:underline"
-                  >
-                    Inscrever
-                  </button>
-                </div>
-                <div className="space-y-2">
-                  {inscricoesCurso.length > 0 ? (
-                    inscricoesCurso.slice(0, 3).map(i => (
-                      <div key={i.id} className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 flex items-center justify-between text-xs">
-                        <div>
-                          <p className="font-semibold text-slate-900 dark:text-slate-100">{i.formando.nomeCompleto}</p>
-                          <p className="text-[10px] text-slate-400">{i.formando.telefone} · {i.formando.email}</p>
+              {/* TAB 7: QUALIDADE */}
+              {activeTab === 'qualidade' && (
+                <Card padding="md" className="space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+                    <div>
+                      <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                        Gestão da Qualidade & Desvios Operacionais
+                      </h3>
+                      <p className="text-[11px] text-[#5B6B7C]">Conformidade ISO 9001 e tratamento de ocorrências</p>
+                    </div>
+                    <button
+                      onClick={() => setActiveModal('ocorrencias')}
+                      className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-[var(--fortis-primary)] text-white hover:opacity-90 flex items-center gap-1"
+                    >
+                      <Plus size={13} />
+                      <span>Registar Ocorrência</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {ocorrenciasCurso.length === 0 ? (
+                      <EmptyState
+                        icon={CheckCircle2}
+                        title="Sem não conformidades"
+                        description="Nenhuma ocorrência ou desvio registado para esta ação de formação."
+                      />
+                    ) : (
+                      ocorrenciasCurso.map(o => (
+                        <div key={o.id} className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-bold text-[11px] text-[#5B6B7C]">{o.codigo}</span>
+                            <StatusBadge variant={o.estado === 'encerrada' ? 'success' : 'warning'}>
+                              {o.estado.replace('_', ' ')}
+                            </StatusBadge>
+                          </div>
+                          <p className="font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">{o.descricaoProblema}</p>
+                          <p className="text-[10px] text-[#D99B24]">Tipo: {o.tipo.replace('_', ' ')}</p>
                         </div>
-                        <span className="text-[10px] font-semibold text-emerald-600">Confirmado</span>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-xs text-slate-400 py-2">Nenhum formando inscrito até ao momento.</p>
-                  )}
-                </div>
-              </div>
+                      ))
+                    )}
+                  </div>
+                </Card>
+              )}
+
+              {/* TAB 8: DOCUMENTOS */}
+              {activeTab === 'documentos' && (
+                <Card padding="md" className="space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+                    <div>
+                      <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                        Certificados Emitidos & Relatório Executivo
+                      </h3>
+                      <p className="text-[11px] text-[#5B6B7C]">Emissão com código de autenticidade QR Code</p>
+                    </div>
+                    <button
+                      onClick={() => setActiveModal('certificados')}
+                      className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-[var(--fortis-secondary)] text-white hover:opacity-90 flex items-center gap-1"
+                    >
+                      <Award size={13} />
+                      <span>Emitir Certificados</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {certificadosCurso.length === 0 ? (
+                      <EmptyState
+                        icon={Award}
+                        title="Sem certificados emitidos"
+                        description="Gere certificados para os formandos aprovados após o encerramento das avaliações."
+                      />
+                    ) : (
+                      certificadosCurso.map(cert => (
+                        <div key={cert.id} className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60 flex items-center justify-between text-xs">
+                          <div>
+                            <span className="font-mono font-bold text-[11px] text-[#1B2A3A] dark:text-[#F1F5F9]">{cert.codigoValidacao}</span>
+                            <p className="text-[11px] text-[#5B6B7C]">Emitido em: {new Date(cert.dataEmissao).toLocaleDateString()} · {cert.cargaHoraria}h</p>
+                          </div>
+                          <StatusBadge variant="success">{cert.estado}</StatusBadge>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </Card>
+              )}
+
+              {/* TAB 9: AUDITORIA */}
+              {activeTab === 'auditoria' && (
+                <Card padding="md" className="space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+                    <div>
+                      <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                        Pista de Auditoria & Encerramento Formal
+                      </h3>
+                      <p className="text-[11px] text-[#5B6B7C]">Rastreabilidade completa de todas as alterações operacionais</p>
+                    </div>
+                    <button
+                      onClick={handleToggleClosure}
+                      className={`px-3 py-1 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors ${
+                        selectedCourse.encerrado
+                          ? 'bg-[#E8F5F1] text-[#16866A]'
+                          : 'bg-[var(--fortis-primary)] text-white'
+                      }`}
+                    >
+                      {selectedCourse.encerrado ? <Lock size={13} /> : <Unlock size={13} />}
+                      <span>{selectedCourse.encerrado ? 'Reabrir Ação' : 'Encerrar Formalmente'}</span>
+                    </button>
+                  </div>
+
+                  <div className="divide-y divide-[#E3E8EF] dark:divide-[#223347]">
+                    {auditoriaCurso.length === 0 ? (
+                      <p className="text-xs text-center py-4 text-[#5B6B7C]">Sem registos de auditoria específicos para esta ação.</p>
+                    ) : (
+                      auditoriaCurso.map(aud => (
+                        <div key={aud.id} className="py-2.5 text-xs space-y-0.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-[#1B2A3A] dark:text-[#F1F5F9]">{aud.resumoAlteracao}</span>
+                            <span className="font-mono text-[10px] text-[#5B6B7C]">{new Date(aud.timestamp).toLocaleString()}</span>
+                          </div>
+                          <p className="text-[10px] text-[#5B6B7C]">Operação {aud.operacao} executada por {aud.autorNome}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </Card>
+              )}
+
             </div>
           </div>
         ) : (
-          <div className="lg:col-span-8 p-12 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
+          <div className="lg:col-span-8 p-12 text-center bg-white dark:bg-[#152232] rounded-xl border border-[#E3E8EF] dark:border-[#223347]">
             <BookOpen size={32} className="mx-auto text-slate-400 mb-3" />
-            <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">Selecione uma ação na coluna esquerda para consultar os detalhes.</p>
+            <p className="text-sm font-semibold text-[#1B2A3A] dark:text-[#F1F5F9]">
+              Selecione uma ação na coluna esquerda para consultar os detalhes.
+            </p>
           </div>
         )}
       </div>
@@ -562,12 +1074,14 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
       {/* MODAL 1: ATUALIZAR STATUS */}
       {activeModal === 'status' && selectedCourse && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-6 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-              <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">Atualizar Status da Ação</h3>
-              <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+          <div className="bg-white dark:bg-[#152232] rounded-2xl max-w-md w-full p-6 border border-[#E3E8EF] dark:border-[#223347] shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+              <h3 className="font-bold text-sm text-[#1B2A3A] dark:text-[#F1F5F9]">Atualizar Estado da Ação</h3>
+              <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={16} />
+              </button>
             </div>
-            <p className="text-xs text-slate-500">Selecione o novo estado de execução para {selectedCourse.nomeCurso}:</p>
+            <p className="text-xs text-[#5B6B7C]">Selecione o novo estado de execução para {selectedCourse.nomeCurso}:</p>
             <div className="space-y-2">
               {[
                 { id: 'agendado' as EstadoCurso, label: 'Agendado', desc: 'Planeamento e captação de formandos' },
@@ -580,12 +1094,12 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
                   onClick={() => handleUpdateStatus(st.id)}
                   className={`w-full p-3 rounded-xl border text-left transition-all ${
                     selectedCourse.estadoCurso === st.id
-                      ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/30'
-                      : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      ? 'border-[var(--fortis-primary)] bg-[var(--fortis-primary-soft)]'
+                      : 'border-[#E3E8EF] dark:border-[#223347] hover:bg-slate-50 dark:hover:bg-slate-800'
                   }`}
                 >
-                  <p className="font-bold text-xs text-slate-900 dark:text-slate-100">{st.label}</p>
-                  <p className="text-[11px] text-slate-400">{st.desc}</p>
+                  <p className="font-bold text-xs text-[#1B2A3A] dark:text-[#F1F5F9]">{st.label}</p>
+                  <p className="text-[11px] text-[#5B6B7C]">{st.desc}</p>
                 </button>
               ))}
             </div>
@@ -593,82 +1107,50 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
         </div>
       )}
 
-      {/* MODAL 2: CHECKLIST DA AÇÃO */}
-      {activeModal === 'checklist' && selectedCourse && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-6 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-              <div>
-                <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">Checklist Pedagógico da Ação</h3>
-                <p className="text-[11px] text-slate-400">{selectedCourse.nomeCurso}</p>
-              </div>
-              <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
-            </div>
-            <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-              {tarefasCurso.map(tar => (
-                <div
-                  key={tar.id}
-                  onClick={() => dataService.toggleTaskState(tar.id, currentUser.id)}
-                  className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 flex items-start gap-3 hover:bg-slate-50 dark:hover:bg-slate-800/60 cursor-pointer transition-colors"
-                >
-                  <input
-                    type="checkbox"
-                    checked={tar.estado === 'concluida'}
-                    onChange={() => {}}
-                    className="mt-0.5 rounded text-amber-600 focus:ring-amber-500"
-                  />
-                  <div className="flex-1">
-                    <p className={`text-xs font-semibold ${tar.estado === 'concluida' ? 'line-through text-slate-400' : 'text-slate-900 dark:text-slate-100'}`}>
-                      {tar.titulo}
-                    </p>
-                    <p className="text-[11px] text-slate-400">{tar.descricao}</p>
-                    <div className="flex items-center gap-3 text-[10px] text-slate-400 mt-1">
-                      <span>Prazo: {tar.dataLimite}</span>
-                      <span>·</span>
-                      <span className="font-medium text-amber-600">{tar.grupoTemporal}</span>
-                      {tar.obrigatoriaParaEncerramento && (
-                        <span className="text-rose-500 font-semibold">Obrigatória ISO</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 3: INSCRIÇÕES NA AÇÃO */}
+      {/* MODAL 2: INSCRIÇÕES NA AÇÃO */}
       {activeModal === 'inscricoes' && selectedCourse && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-6 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-              <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">Inscrições e Vagas ({inscricoesCurso.length}/{selectedCourse.vagasMaximas})</h3>
-              <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+          <div className="bg-white dark:bg-[#152232] rounded-2xl max-w-lg w-full p-6 border border-[#E3E8EF] dark:border-[#223347] shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+              <h3 className="font-bold text-sm text-[#1B2A3A] dark:text-[#F1F5F9]">
+                Inscrições e Vagas ({inscricoesCurso.length}/{selectedCourse.vagasMaximas})
+              </h3>
+              <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={16} />
+              </button>
             </div>
-            
-            {/* Adicionar Formando Rápido */}
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 space-y-2">
-              <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">Inscrever Formando Existente:</span>
+
+            <div className="p-3 rounded-xl bg-[#F4F6F9] dark:bg-[#0B111B] space-y-2">
+              <span className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] block">
+                Inscrever Formando Existente:
+              </span>
               <div className="flex gap-2">
                 <select
                   id="select-formando"
-                  className="flex-1 text-xs py-1.5 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                  className="flex-1 text-xs py-1.5 px-2 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232] text-[#1B2A3A] dark:text-[#F1F5F9]"
                 >
                   {dataService.getPeople(currentOrg.id).map(p => (
-                    <option key={p.id} value={p.id}>{p.nomeCompleto} ({p.email})</option>
+                    <option key={p.id} value={p.id}>
+                      {p.nomeCompleto} ({p.email})
+                    </option>
                   ))}
                 </select>
                 <button
                   onClick={() => {
                     const sel = document.getElementById('select-formando') as HTMLSelectElement;
                     if (sel) {
-                      const res = dataService.enrollStudent(selectedCourse.id, sel.value, selectedCourse.precoInscricao, currentUser.id, currentOrg.id);
+                      const res = dataService.enrollStudent(
+                        selectedCourse.id,
+                        sel.value,
+                        selectedCourse.precoInscricao,
+                        currentUser.id,
+                        currentOrg.id
+                      );
                       setStatusFeedback(res.message);
                       setTimeout(() => setStatusFeedback(null), 3000);
                     }
                   }}
-                  className="px-3 py-1.5 text-xs font-semibold text-white rounded-lg bg-amber-600 hover:bg-amber-700"
+                  className="px-3 py-1.5 text-xs font-semibold text-white rounded-lg bg-[var(--fortis-primary)] hover:opacity-90"
                 >
                   Inscrever
                 </button>
@@ -677,12 +1159,12 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
 
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {inscricoesCurso.map(i => (
-                <div key={i.id} className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs">
+                <div key={i.id} className="p-2.5 rounded-lg border border-[#E3E8EF] dark:border-[#223347] flex items-center justify-between text-xs">
                   <div>
-                    <p className="font-semibold text-slate-900 dark:text-slate-100">{i.formando.nomeCompleto}</p>
-                    <p className="text-[10px] text-slate-400">Inscrito a: {new Date(i.dataInscricao).toLocaleDateString()}</p>
+                    <p className="font-semibold text-[#1B2A3A] dark:text-[#F1F5F9]">{i.formando.nomeCompleto}</p>
+                    <p className="text-[10px] text-[#5B6B7C]">Inscrito a: {new Date(i.dataInscricao).toLocaleDateString()}</p>
                   </div>
-                  <span className="font-bold text-emerald-600">{i.valorPago.toLocaleString()} Kz</span>
+                  <span className="font-bold text-[#16866A] font-mono">{i.valorPago.toLocaleString()} Kz</span>
                 </div>
               ))}
             </div>
@@ -690,33 +1172,36 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
         </div>
       )}
 
-      {/* MODAL 4: PAUTA DE SESSÕES E PRESENÇAS */}
+      {/* MODAL 3: PAUTA DE SESSÕES */}
       {activeModal === 'pauta' && selectedCourse && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-xl w-full p-6 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+          <div className="bg-white dark:bg-[#152232] rounded-2xl max-w-xl w-full p-6 border border-[#E3E8EF] dark:border-[#223347] shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
               <div>
-                <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">Pauta e Sessões da Ação</h3>
-                <p className="text-[11px] text-slate-400">{selectedCourse.nomeCurso}</p>
+                <h3 className="font-bold text-sm text-[#1B2A3A] dark:text-[#F1F5F9]">Pauta e Sessões da Ação</h3>
+                <p className="text-[11px] text-[#5B6B7C]">{selectedCourse.nomeCurso}</p>
               </div>
-              <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+              <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={16} />
+              </button>
             </div>
-            
+
             <div className="space-y-3 max-h-80 overflow-y-auto">
               {sessoesCurso.length > 0 ? (
                 sessoesCurso.map(ses => (
-                  <div key={ses.id} className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 space-y-2">
+                  <div key={ses.id} className="p-3 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60 space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-amber-600">Sessão {ses.numeroSessao} · {ses.data} ({ses.horaInicio} às {ses.horaFim})</span>
-                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">{ses.estadoSessao}</span>
+                      <span className="text-xs font-bold text-[#D99B24]">
+                        Sessão {ses.numeroSessao} · {ses.data} ({ses.horaInicio} às {ses.horaFim})
+                      </span>
+                      <StatusBadge variant="success">{ses.estadoSessao}</StatusBadge>
                     </div>
-                    <p className="text-xs text-slate-700 dark:text-slate-300">{ses.sumarioTopicos}</p>
-                    
-                    <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700 flex justify-between items-center text-xs">
-                      <span className="text-slate-400">Sala: {ses.salaEspecifica}</span>
-                      <button 
+                    <p className="text-xs text-[#1B2A3A] dark:text-[#F1F5F9]">{ses.sumarioTopicos}</p>
+
+                    <div className="pt-2 border-t border-[#E3E8EF]/60 dark:border-[#223347]/60 flex justify-between items-center text-xs">
+                      <span className="text-[#5B6B7C]">Sala: {ses.salaEspecifica}</span>
+                      <button
                         onClick={() => {
-                          // Simular marcação de presenças para todos os inscritos
                           const novasPresencas = inscricoesCurso.map(i => ({
                             empresaId: currentOrg.id,
                             sessaoId: ses.id,
@@ -726,7 +1211,7 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
                             minutosAtraso: 0,
                           }));
                           dataService.saveAttendanceBatch(novasPresencas, currentUser.id);
-                          setStatusFeedback(`Presenças da Sessão ${ses.numeroSessao} registadas para ${novasPresencas.length} formando(s).`);
+                          setStatusFeedback(`Presenças da Sessão ${ses.numeroSessao} registadas.`);
                           setTimeout(() => setStatusFeedback(null), 3500);
                         }}
                         className="px-2.5 py-1 text-[11px] font-semibold rounded bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 hover:opacity-90"
@@ -738,25 +1223,28 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
                 ))
               ) : (
                 <div className="text-center py-6">
-                  <p className="text-xs text-slate-400">Nenhuma sessão agendada para esta ação.</p>
+                  <p className="text-xs text-[#5B6B7C]">Nenhuma sessão agendada para esta ação.</p>
                   <button
                     onClick={() => {
-                      dataService.createSession({
-                        empresaId: currentOrg.id,
-                        cursoId: selectedCourse.id,
-                        numeroSessao: 1,
-                        data: selectedCourse.dataInicio,
-                        horaInicio: '14:00',
-                        horaFim: '18:00',
-                        sumarioTopicos: 'Introdução aos módulos e objetivos da ação.',
-                        formadorPrincipalId: formadoresCurso[0]?.formadorId || currentUser.id,
-                        salaEspecifica: selectedCourse.localSala,
-                        estadoSessao: 'agendada',
-                      }, currentUser.id);
+                      dataService.createSession(
+                        {
+                          empresaId: currentOrg.id,
+                          cursoId: selectedCourse.id,
+                          numeroSessao: 1,
+                          data: selectedCourse.dataInicio,
+                          horaInicio: '14:00',
+                          horaFim: '18:00',
+                          sumarioTopicos: 'Introdução aos módulos e objetivos da ação.',
+                          formadorPrincipalId: formadoresCurso[0]?.formadorId || currentUser.id,
+                          salaEspecifica: selectedCourse.localSala,
+                          estadoSessao: 'agendada',
+                        },
+                        currentUser.id
+                      );
                       setStatusFeedback('Primeira sessão criada com sucesso.');
                       setTimeout(() => setStatusFeedback(null), 3000);
                     }}
-                    className="mt-2 px-3 py-1.5 text-xs font-semibold rounded-lg text-white bg-amber-600"
+                    className="mt-2 px-3 py-1.5 text-xs font-semibold rounded-lg text-white bg-[var(--fortis-primary)]"
                   >
                     Agendar Sessão 01
                   </button>
@@ -767,19 +1255,21 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
         </div>
       )}
 
-      {/* MODAL 5: RESUMO DE IA */}
+      {/* MODAL 4: RESUMO INTELIGENTE */}
       {activeModal === 'resumo_ia' && selectedCourse && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-6 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+          <div className="bg-white dark:bg-[#152232] rounded-2xl max-w-lg w-full p-6 border border-[#E3E8EF] dark:border-[#223347] shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
               <div className="flex items-center gap-2">
-                <Sparkles size={16} className="text-amber-500" />
-                <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">Síntese Inteligente da Ação</h3>
+                <Sparkles size={16} className="text-[#D99B24]" />
+                <h3 className="font-bold text-sm text-[#1B2A3A] dark:text-[#F1F5F9]">Síntese da Ação de Formação</h3>
               </div>
-              <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+              <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={16} />
+              </button>
             </div>
-            
-            <div className="p-4 rounded-xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/60 space-y-3 text-xs leading-relaxed text-slate-700 dark:text-slate-300">
+
+            <div className="p-4 rounded-xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/60 space-y-3 text-xs leading-relaxed text-[#1B2A3A] dark:text-[#F1F5F9]">
               <p>
                 <strong>Diagnóstico Pedagógico:</strong> A ação <em>{selectedCourse.nomeCurso}</em> possui atualmente <strong>{inscricoesCurso.length} formandos inscritos</strong> com taxa de conformidade documental avaliada em <strong>{selectedCourse.conformidadePercent}%</strong>.
               </p>
@@ -803,35 +1293,41 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
         </div>
       )}
 
-      {/* MODAL 6: CRIAR NOVO CURSO */}
+      {/* MODAL 5: CRIAR NOVO CURSO */}
       {activeModal === 'novo_curso' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-6 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-              <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">Adicionar Nova Ação de Formação</h3>
-              <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+          <div className="bg-white dark:bg-[#152232] rounded-2xl max-w-lg w-full p-6 border border-[#E3E8EF] dark:border-[#223347] shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+              <h3 className="font-bold text-sm text-[#1B2A3A] dark:text-[#F1F5F9]">Adicionar Nova Ação de Formação</h3>
+              <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={16} />
+              </button>
             </div>
-            
+
             <form onSubmit={handleCreateCourseSubmit} className="space-y-3 text-xs">
               <div>
-                <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">Nome da Formação</label>
+                <label className="block text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8] mb-1">
+                  Nome da Formação
+                </label>
                 <input
                   type="text"
                   required
                   value={novoCursoForm.nomeCurso}
                   onChange={e => setNovoCursoForm(f => ({ ...f, nomeCurso: e.target.value }))}
                   placeholder="Ex: Gestão e Controlo da Qualidade Industrial"
-                  className="w-full py-1.5 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                  className="w-full py-1.5 px-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">Período / Turno</label>
+                  <label className="block text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8] mb-1">
+                    Período / Turno
+                  </label>
                   <select
                     value={novoCursoForm.periodo}
-                    onChange={e => setNovoCursoForm(f => ({ ...f, periodo: e.target.value as any }))}
-                    className="w-full py-1.5 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                    onChange={e => setNovoCursoForm(f => ({ ...f, periodo: e.target.value as PeriodoTurno }))}
+                    className="w-full py-1.5 px-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
                   >
                     <option value="manha">Manhã</option>
                     <option value="tarde">Tarde</option>
@@ -840,71 +1336,81 @@ export const CoursesView: React.FC<CoursesViewProps> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">Sala / Local</label>
+                  <label className="block text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8] mb-1">
+                    Sala / Local
+                  </label>
                   <input
                     type="text"
                     value={novoCursoForm.localSala}
                     onChange={e => setNovoCursoForm(f => ({ ...f, localSala: e.target.value }))}
-                    className="w-full py-1.5 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                    className="w-full py-1.5 px-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">Data Início</label>
+                  <label className="block text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8] mb-1">
+                    Data Início
+                  </label>
                   <input
                     type="date"
                     required
                     value={novoCursoForm.dataInicio}
                     onChange={e => setNovoCursoForm(f => ({ ...f, dataInicio: e.target.value }))}
-                    className="w-full py-1.5 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                    className="w-full py-1.5 px-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">Data Fim</label>
+                  <label className="block text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8] mb-1">
+                    Data Fim
+                  </label>
                   <input
                     type="date"
                     required
                     value={novoCursoForm.dataFim}
                     onChange={e => setNovoCursoForm(f => ({ ...f, dataFim: e.target.value }))}
-                    className="w-full py-1.5 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                    className="w-full py-1.5 px-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">Vagas Máximas</label>
+                  <label className="block text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8] mb-1">
+                    Vagas Máximas
+                  </label>
                   <input
                     type="number"
                     value={novoCursoForm.vagasMaximas}
                     onChange={e => setNovoCursoForm(f => ({ ...f, vagasMaximas: Number(e.target.value) }))}
-                    className="w-full py-1.5 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                    className="w-full py-1.5 px-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">Preço Inscrição (Kz)</label>
+                  <label className="block text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8] mb-1">
+                    Preço Inscrição (Kz)
+                  </label>
                   <input
                     type="number"
                     value={novoCursoForm.precoInscricao}
                     onChange={e => setNovoCursoForm(f => ({ ...f, precoInscricao: Number(e.target.value) }))}
-                    className="w-full py-1.5 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                    className="w-full py-1.5 px-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
                   />
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex justify-end gap-2 pt-3 border-t border-[#E3E8EF] dark:border-[#223347]">
                 <button
                   type="button"
                   onClick={() => setActiveModal(null)}
-                  className="px-3.5 py-1.5 text-xs font-semibold rounded-lg text-slate-600 hover:bg-slate-100"
+                  className="px-3.5 py-1.5 text-xs font-semibold rounded-lg text-[#5B6B7C] hover:bg-slate-100"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 text-xs font-semibold rounded-lg text-white bg-amber-600 hover:bg-amber-700"
+                  className="px-4 py-1.5 text-xs font-semibold rounded-lg text-white bg-[var(--fortis-primary)] hover:opacity-90"
                 >
                   Criar Curso
                 </button>

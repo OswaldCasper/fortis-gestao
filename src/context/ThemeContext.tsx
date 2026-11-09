@@ -26,9 +26,9 @@ interface ThemeContextType {
 }
 
 const DEFAULT_TEMA_CONFIG: TemaConfig = {
-  corPrimaria: '#C59B27', // Dourado nobre padrão FORTIS
-  corSecundaria: '#0F172A', // Ardósia / Obsidiana corporativo
-  corTerciaria: '#3B82F6', // Azul institucional
+  corPrimaria: '#183B5B', // Azul base FORTIS
+  corSecundaria: '#D99B24', // Dourado executivo FORTIS
+  corTerciaria: '#16866A', // Verde conformidade FORTIS
   modoPadrao: 'claro',
 };
 
@@ -133,16 +133,32 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     
     const rgbPrim = hexToRgb(prim);
     if (rgbPrim) {
-      root.style.setProperty('--fortis-primary-ring', `rgba(${rgbPrim.r}, ${rgbPrim.g}, ${rgbPrim.b}, 0.35)`);
+      root.style.setProperty('--fortis-primary-ring', `rgba(${rgbPrim.r}, ${rgbPrim.g}, ${rgbPrim.b}, 0.25)`);
+      root.style.setProperty('--fortis-primary-soft', isDarkMode 
+        ? `rgba(${rgbPrim.r}, ${rgbPrim.g}, ${rgbPrim.b}, 0.22)` 
+        : `rgba(${rgbPrim.r}, ${rgbPrim.g}, ${rgbPrim.b}, 0.08)`);
       root.style.setProperty('--fortis-primary-light', isDarkMode 
-        ? `rgba(${rgbPrim.r}, ${rgbPrim.g}, ${rgbPrim.b}, 0.15)` 
+        ? `rgba(${rgbPrim.r}, ${rgbPrim.g}, ${rgbPrim.b}, 0.18)` 
         : `rgba(${rgbPrim.r}, ${rgbPrim.g}, ${rgbPrim.b}, 0.08)`);
     }
 
     root.style.setProperty('--fortis-secondary', sec);
     root.style.setProperty('--fortis-secondary-hover', adjustColorBrightness(sec, 10));
+    const rgbSec = hexToRgb(sec);
+    if (rgbSec) {
+      root.style.setProperty('--fortis-secondary-soft', isDarkMode 
+        ? `rgba(${rgbSec.r}, ${rgbSec.g}, ${rgbSec.b}, 0.20)` 
+        : `rgba(${rgbSec.r}, ${rgbSec.g}, ${rgbSec.b}, 0.12)`);
+    }
+
     root.style.setProperty('--fortis-tertiary', tert);
     root.style.setProperty('--fortis-tertiary-hover', adjustColorBrightness(tert, -10));
+    const rgbTert = hexToRgb(tert);
+    if (rgbTert) {
+      root.style.setProperty('--fortis-tertiary-soft', isDarkMode 
+        ? `rgba(${rgbTert.r}, ${rgbTert.g}, ${rgbTert.b}, 0.20)` 
+        : `rgba(${rgbTert.r}, ${rgbTert.g}, ${rgbTert.b}, 0.10)`);
+    }
 
     localStorage.setItem('fortis_org_theme', JSON.stringify(temaConfig));
   }, [temaConfig, isDarkMode]);

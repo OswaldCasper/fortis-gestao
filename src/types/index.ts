@@ -73,11 +73,26 @@ export interface Pessoa {
   atualizadoEm: string;
 }
 
+export const ROLE_HIERARCHY: Record<PapelAcesso, number> = {
+  superadmin_plataforma: 100,
+  superadmin_org: 50,
+  admin: 40,
+  gestor: 30,
+  formador: 20,
+  formando: 10,
+};
+
+export function deriveHighestRole(roles: PapelAcesso[]): PapelAcesso {
+  if (!roles || roles.length === 0) return 'formando';
+  return [...roles].sort((a, b) => (ROLE_HIERARCHY[b] ?? 0) - (ROLE_HIERARCHY[a] ?? 0))[0] || 'formando';
+}
+
 export interface MembroOrganizacao {
-  id: string; // authUid_empresaId
-  empresaId: string;
-  pessoaId: string;
-  papelAcesso: PapelAcesso;
+  id: string; // id do registo na BD
+  empresaId: string; // organizacao_id
+  pessoaId: string; // pessoa_id
+  papelAcesso: PapelAcesso; // Mais alto derivado
+  papeis: PapelAcesso[]; // Lista completa de papéis
   funcoesProfissionais: string[];
   departamentoOuEmpresaOrigem: string;
   cargo: string;
@@ -87,6 +102,7 @@ export interface MembroOrganizacao {
   horaInicio?: string;
   horaFim?: string;
   criadoEm: string;
+  atualizadoEm?: string;
 }
 
 export interface FormacaoCatalogo {

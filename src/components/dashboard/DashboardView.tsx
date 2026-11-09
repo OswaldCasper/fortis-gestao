@@ -2,10 +2,10 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  * FORTIS — Sistema Integrado de Gestão da Formação
- * DashboardView: Centro de controlo executivo dinâmico com 6 áreas analíticas, 8 KPIs matemáticos e 6 modos de visualização
+ * DashboardView: Centro de controlo executivo dinâmico com 6 áreas analíticas, 8 KPIs e 6 modos de visualização
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   BookOpen,
   Users,
@@ -28,13 +28,29 @@ import {
   ArrowRight,
   ShieldAlert,
   ChevronRight,
+  ChevronDown,
   DollarSign,
   GraduationCap,
+  X,
+  Search,
+  CheckSquare,
+  AlertCircle,
+  Building2,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
-import { FiltrosDashboard, Curso } from '../../types';
+import { FiltrosDashboard, Curso, EstadoCurso, TarefaChecklist } from '../../types';
 import { ActiveModule } from '../layout/Sidebar';
+import {
+  Card,
+  StatCard,
+  StatusBadge,
+  DataTable,
+  EmptyState,
+  Tabs,
+  SegmentedControl,
+} from '../ui';
 
 interface DashboardViewProps {
   onNavigateModule: (module: ActiveModule) => void;
@@ -64,34 +80,76 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     encerrado: 'Todos',
   });
 
-  // Área analítica ativa (matching image_50b58b17.png: Visão Geral, Formandos, Formadores, Financeiro, Qualidade, Temporal)
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
+  const moreFiltersRef = useRef<HTMLDivElement>(null);
+
+  // Fecha o dropdown de mais filtros ao clicar fora
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (moreFiltersRef.current && !moreFiltersRef.current.contains(event.target as Node)) {
+        setShowMoreFilters(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Área analítica ativa
   const [areaAtiva, setAreaAtiva] = useState<AreaAnalitica>('visao_geral');
 
-  // Modo de visualização ativo (matching image_605a31ae.png: Resumo, Gráficos, Tabela, Cartões, Progresso, Calendário)
+  // Modo de visualização ativo
   const [modoVisualizacao, setModoVisualizacao] = useState<ModoVisualizacao>('resumo');
+
+  // Atualização reativa de tarefas e dados
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    const unsub = dataService.subscribe(() => setVersion(v => v + 1));
+    return unsub;
+  }, []);
 
   // Dados filtrados e KPIs
   const cursosFiltrados = useMemo(() => {
     return dataService.getCourses(currentOrg.id, filtros);
-  }, [currentOrg.id, filtros]);
+  }, [currentOrg.id, filtros, version]);
 
   const kpis = useMemo(() => {
     return dataService.calculateDashboardKPIs(currentOrg.id, filtros);
-  }, [currentOrg.id, filtros]);
+  }, [currentOrg.id, filtros, version]);
 
   const monthlyEvolution = useMemo(() => {
     return dataService.getMonthlyEvolution(currentOrg.id, filtros);
-  }, [currentOrg.id, filtros]);
+  }, [currentOrg.id, filtros, version]);
 
   const statusDistribution = useMemo(() => {
     return dataService.getStatusDistribution(currentOrg.id, filtros);
-  }, [currentOrg.id, filtros]);
+  }, [currentOrg.id, filtros, version]);
 
-  const formadores = useMemo(() => dataService.getTrainers(currentOrg.id), [currentOrg.id]);
-  const pessoas = useMemo(() => dataService.getPeople(currentOrg.id), [currentOrg.id]);
-  const tarefas = useMemo(() => dataService.getTasks(currentOrg.id), [currentOrg.id]);
-  const financeiro = useMemo(() => dataService.getFinancialRecords(currentOrg.id), [currentOrg.id]);
-  const ocorrencias = useMemo(() => dataService.getOccurrences(currentOrg.id), [currentOrg.id]);
+  const formadores = useMemo(() => dataService.getTrainers(currentOrg.id), [currentOrg.id, version]);
+  const pessoas = useMemo(() => dataService.getPeople(currentOrg.id), [currentOrg.id, version]);
+  const todasTarefas = useMemo(() => dataService.getTasks(currentOrg.id), [currentOrg.id, version]);
+  const ocorrencias = useMemo(() => dataService.getOccurrences(currentOrg.id), [currentOrg.id, version]);
+  const financeiro = useMemo(() => dataService.getFinancialRecords(currentOrg.id), [currentOrg.id, version]);
+
+  // Contagem de filtros extras ativos
+  const activeExtraFiltersCount = useMemo(() => {
+    let count = 0;
+    if (filtros.estadoCurso !== 'Todos') count++;
+    if (filtros.encerrado !== 'Todos') count++;
+    if (filtros.formadorId !== 'Todos') count++;
+    if (filtros.categoria !== 'Todas') count++;
+    if (filtros.instituicao !== 'Todas') count++;
+    if (filtros.pesquisaTexto && filtros.pesquisaTexto.trim().length > 0) count++;
+    return count;
+  }, [filtros]);
+
+  const isFiltersDirty = useMemo(() => {
+    return (
+      filtros.ano !== 'Todos' ||
+      filtros.meses !== 'Todos' ||
+      filtros.periodo !== 'Todos' ||
+      activeExtraFiltersCount > 0
+    );
+  }, [filtros, activeExtraFiltersCount]);
 
   const handleResetFilters = () => {
     setFiltros({
@@ -108,867 +166,1387 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     });
   };
 
-  // Anos disponíveis para filtro
+  // Toggle de tarefa diretamente na lista operacional
+  const handleToggleTask = (taskId: string) => {
+    dataService.toggleTaskState(taskId, currentUser.id);
+  };
+
+  // Tarefas operacionais: Em Atraso ou a vencer nos próximos 7 dias
+  const tarefasOperacionais = useMemo(() => {
+    return todasTarefas.filter(
+      t => t.estado !== 'concluida' && (t.grupoTemporal === 'Em Atraso' || t.diasRestantes <= 7)
+    );
+  }, [todasTarefas]);
+
+  // Próximas formações ordenadas
+  const proximasFormacoes = useMemo(() => {
+    return [...cursosFiltrados]
+      .filter(c => c.estadoCurso === 'agendado' || c.estadoCurso === 'em_andamento')
+      .sort((a, b) => new Date(a.dataInicio).getTime() - new Date(b.dataInicio).getTime())
+      .slice(0, 4);
+  }, [cursosFiltrados]);
+
+  // Alertas de qualidade abertos
+  const alertasQualidade = useMemo(() => {
+    return ocorrencias
+      .filter(o => o.estado !== 'encerrada')
+      .slice(0, 3);
+  }, [ocorrencias]);
+
   const anosDisponiveis = ['Todos', '2026', '2025', '2004'];
-  const mesesNomes = ['Todos', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  const mesesNomes = [
+    { id: 'Todos', label: 'Todos' },
+    { id: '1', label: 'Jan' },
+    { id: '2', label: 'Fev' },
+    { id: '3', label: 'Mar' },
+    { id: '4', label: 'Abr' },
+    { id: '5', label: 'Mai' },
+    { id: '6', label: 'Jun' },
+    { id: '7', label: 'Jul' },
+    { id: '8', label: 'Ago' },
+    { id: '9', label: 'Set' },
+    { id: '10', label: 'Out' },
+    { id: '11', label: 'Nov' },
+    { id: '12', label: 'Dez' },
+  ];
+
+  const dataAtualFormatada = useMemo(() => {
+    const agora = new Date();
+    return agora.toLocaleDateString('pt-PT', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+  }, []);
+
+  // Helper para badge de estado
+  const getBadgeVariant = (estado: EstadoCurso): 'success' | 'warning' | 'info' | 'neutral' => {
+    switch (estado) {
+      case 'realizado':
+        return 'success';
+      case 'em_andamento':
+        return 'info';
+      case 'agendado':
+        return 'warning';
+      default:
+        return 'neutral';
+    }
+  };
+
+  const areasAnaliticasTabs = [
+    { id: 'visao_geral', label: 'Visão Geral' },
+    { id: 'formandos', label: 'Formandos' },
+    { id: 'formadores', label: 'Formadores' },
+    { id: 'financeiro', label: 'Financeiro' },
+    { id: 'qualidade', label: 'Qualidade' },
+    { id: 'temporal', label: 'Temporal' },
+  ];
+
+  const modosVisualizacaoOptions = [
+    { value: 'resumo', label: 'Resumo', icon: LayoutGrid },
+    { value: 'graficos', label: 'Gráficos', icon: BarChart2 },
+    { value: 'tabela', label: 'Tabela', icon: TableIcon },
+    { value: 'cartoes', label: 'Cartões', icon: CreditCard },
+    { value: 'progresso', label: 'Progresso', icon: PieChart },
+    { value: 'calendario', label: 'Calendário', icon: CalendarDays },
+  ];
 
   return (
     <div className="space-y-6 pb-12 animate-in fade-in duration-200">
-      {/* 1. CABEÇALHO DO DASHBOARD (Fiel à Maquete) */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl md:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+      {/* 1. TOPO COMPACTO — Regra: 1 linha, sem moldura pesada, único botão de destaque */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="space-y-0.5">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-xl font-bold tracking-tight text-[#1B2A3A] dark:text-[#F1F5F9]">
               Bom dia, {currentUser.nomeCompleto.split(' ')[0]}
             </h1>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              Sistema ativo
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-[#E8F5F1] text-[#16866A] dark:bg-[#0C3328] dark:text-[#20A785]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#16866A] dark:bg-[#20A785]" />
+              Ativo
             </span>
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-2">
-            <span>Visão geral da organização · {new Date().toLocaleDateString('pt-PT', { day: '2-digit', month: 'long', year: 'numeric' })}</span>
-            <span>·</span>
-            <span className="font-medium text-slate-700 dark:text-slate-300">{currentOrg.designacao}</span>
+          <p className="text-xs text-[#5B6B7C] dark:text-[#94A3B8] capitalize">
+            {currentOrg.designacao} · <span className="normal-case">{dataAtualFormatada}</span>
           </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        {/* Único botão com destaque primário/secundário no ecrã */}
+        <div className="shrink-0">
           <button
             onClick={() => onNavigateModule('cursos')}
-            className="px-3.5 py-2 text-xs font-semibold text-white rounded-lg shadow-sm transition-all hover:opacity-95 flex items-center gap-2"
-            style={{ backgroundColor: 'var(--fortis-primary)' }}
+            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg text-white shadow-xs transition-all hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[var(--fortis-primary)]"
+            style={{ backgroundColor: 'var(--fortis-secondary)' }}
           >
-            <BookOpen size={14} />
-            <span>Ver Todos os Cursos</span>
+            <BookOpen size={15} />
+            <span>Ver todos os cursos</span>
           </button>
         </div>
       </div>
 
-      {/* 2. BARRA DE FILTROS GLOBAIS INTEGRADOS (Preservando a imagem de referência) */}
-      <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-300">
-            <Filter size={14} style={{ color: 'var(--fortis-primary)' }} />
-            <span>Filtros Globais Integrados</span>
-          </div>
-          <button
-            onClick={handleResetFilters}
-            className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-amber-600 dark:hover:text-amber-400 font-medium transition-colors"
-          >
-            <RotateCcw size={13} />
-            <span>Limpar filtros</span>
-          </button>
-        </div>
+      {/* 2. BARRA DE FILTROS — Compacta em 1 linha com popover de "Mais filtros" e chips */}
+      <div className="bg-white dark:bg-[#152232] border border-[#E3E8EF] dark:border-[#223347] rounded-xl p-3 shadow-xs space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          {/* Lado esquerdo: Filtros compactos principais */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-[#5B6B7C] dark:text-[#94A3B8] flex items-center gap-1.5 mr-1">
+              <Filter size={13} className="text-[var(--fortis-primary)]" />
+              <span>Filtros:</span>
+            </span>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5">
-          {/* Ano */}
-          <div>
-            <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-              Ano
-            </label>
-            <select
-              value={filtros.ano}
-              onChange={e => setFiltros(f => ({ ...f, ano: e.target.value }))}
-              className="w-full text-xs py-1.5 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
-            >
-              {anosDisponiveis.map(a => (
-                <option key={a} value={a}>{a}</option>
-              ))}
-            </select>
-          </div>
+            {/* Select Ano */}
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] font-medium text-[#5B6B7C] dark:text-[#94A3B8]">Ano</span>
+              <select
+                value={filtros.ano}
+                onChange={e => setFiltros(f => ({ ...f, ano: e.target.value }))}
+                className="text-xs py-1 px-2 rounded-md border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9] font-medium focus:outline-none focus:ring-1 focus:ring-[var(--fortis-primary)]"
+              >
+                {anosDisponiveis.map(a => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          {/* Meses */}
-          <div>
-            <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-              Meses
-            </label>
-            <select
-              value={filtros.meses}
-              onChange={e => setFiltros(f => ({ ...f, meses: e.target.value }))}
-              className="w-full text-xs py-1.5 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
-            >
-              {mesesNomes.map((m, idx) => (
-                <option key={m} value={idx === 0 ? 'Todos' : idx.toString()}>{m}</option>
-              ))}
-            </select>
-          </div>
+            {/* Select Mês */}
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] font-medium text-[#5B6B7C] dark:text-[#94A3B8]">Mês</span>
+              <select
+                value={filtros.meses}
+                onChange={e => setFiltros(f => ({ ...f, meses: e.target.value }))}
+                className="text-xs py-1 px-2 rounded-md border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9] font-medium focus:outline-none focus:ring-1 focus:ring-[var(--fortis-primary)]"
+              >
+                {mesesNomes.map(m => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          {/* Período / Turno */}
-          <div>
-            <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-              Período
-            </label>
-            <select
-              value={filtros.periodo}
-              onChange={e => setFiltros(f => ({ ...f, periodo: e.target.value }))}
-              className="w-full text-xs py-1.5 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
-            >
-              <option value="Todos">Todos</option>
-              <option value="manha">Manhã</option>
-              <option value="tarde">Tarde</option>
-              <option value="noite">Noite</option>
-              <option value="sabado">Sábado</option>
-            </select>
-          </div>
+            {/* Select Período */}
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] font-medium text-[#5B6B7C] dark:text-[#94A3B8]">Período</span>
+              <select
+                value={filtros.periodo}
+                onChange={e => setFiltros(f => ({ ...f, periodo: e.target.value }))}
+                className="text-xs py-1 px-2 rounded-md border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9] font-medium focus:outline-none focus:ring-1 focus:ring-[var(--fortis-primary)]"
+              >
+                <option value="Todos">Todos</option>
+                <option value="manha">Manhã</option>
+                <option value="tarde">Tarde</option>
+                <option value="noite">Noite</option>
+                <option value="sabado">Sábado</option>
+              </select>
+            </div>
 
-          {/* Estado do Curso */}
-          <div>
-            <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-              Estado
-            </label>
-            <select
-              value={filtros.estadoCurso}
-              onChange={e => setFiltros(f => ({ ...f, estadoCurso: e.target.value }))}
-              className="w-full text-xs py-1.5 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
-            >
-              <option value="Todos">Todos</option>
-              <option value="agendado">Agendado</option>
-              <option value="em_andamento">Em Andamento</option>
-              <option value="realizado">Realizado</option>
-              <option value="cancelado">Cancelado</option>
-            </select>
-          </div>
-
-          {/* Encerramento Formal */}
-          <div>
-            <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-              Encerramento
-            </label>
-            <select
-              value={filtros.encerrado}
-              onChange={e => setFiltros(f => ({ ...f, encerrado: e.target.value }))}
-              className="w-full text-xs py-1.5 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
-            >
-              <option value="Todos">Todos</option>
-              <option value="apenas_abertos">Apenas Em Aberto</option>
-              <option value="apenas_encerrados">Apenas Encerrados</option>
-            </select>
-          </div>
-
-          {/* Formador */}
-          <div>
-            <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-              Formador
-            </label>
-            <select
-              value={filtros.formadorId}
-              onChange={e => setFiltros(f => ({ ...f, formadorId: e.target.value }))}
-              className="w-full text-xs py-1.5 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium truncate"
-            >
-              <option value="Todos">Todos</option>
-              {formadores.map(form => (
-                <option key={form.id} value={form.id}>{form.nomeCompleto.split(' ')[0]} {form.nomeCompleto.split(' ').slice(-1)}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* 3. NAVEGAÇÃO DAS 6 ÁREAS ANALÍTICAS (matching image_50b58b17.png) */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-        {[
-          { id: 'visao_geral' as AreaAnalitica, label: 'Visão Geral' },
-          { id: 'formandos' as AreaAnalitica, label: 'Formandos' },
-          { id: 'formadores' as AreaAnalitica, label: 'Formadores' },
-          { id: 'financeiro' as AreaAnalitica, label: 'Financeiro' },
-          { id: 'qualidade' as AreaAnalitica, label: 'Qualidade' },
-          { id: 'temporal' as AreaAnalitica, label: 'Temporal' },
-        ].map(area => {
-          const isActive = areaAtiva === area.id;
-          return (
-            <button
-              key={area.id}
-              onClick={() => setAreaAtiva(area.id)}
-              className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap ${
-                isActive
-                  ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 shadow-sm'
-                  : 'bg-white dark:bg-slate-800/80 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 border border-slate-200/80 dark:border-slate-800'
-              }`}
-            >
-              {area.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* 4. OS 8 INDICADORES PRINCIPAIS DA VISÃO GERAL (4x2 Grid como na referência real) */}
-      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-3.5">
-        {/* Card 1: Total de Ações */}
-        <div 
-          onClick={() => onNavigateModule('cursos')}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs hover:border-amber-400/80 transition-all cursor-pointer group"
-        >
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-xs font-medium">Total de ações</span>
-            <BookOpen size={16} className="text-slate-400 group-hover:text-amber-500 transition-colors" />
-          </div>
-          <p className="text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-            {kpis.totalAcoes}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
-            <span>Ano {filtros.ano}</span>
-          </p>
-        </div>
-
-        {/* Card 2: Taxa de Aprovação */}
-        <div 
-          onClick={() => onNavigateModule('avaliacoes')}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs hover:border-amber-400/80 transition-all cursor-pointer group"
-        >
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-xs font-medium">Taxa de aprovação</span>
-            <TrendingUp size={16} className="text-emerald-500" />
-          </div>
-          <p className="text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-            {kpis.taxaAprovacao}%
-          </p>
-          <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1 font-medium">
-            Desduplicado por formando
-          </p>
-        </div>
-
-        {/* Card 3: Satisfação Média */}
-        <div 
-          onClick={() => onNavigateModule('avaliacoes')}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs hover:border-amber-400/80 transition-all cursor-pointer group"
-        >
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-xs font-medium">Satisfação média</span>
-            <Star size={16} className="text-amber-400 fill-amber-400" />
-          </div>
-          <p className="text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-            {kpis.satisfacaoMedia > 0 ? kpis.satisfacaoMedia.toFixed(1) : '—'}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Escala de 1 a 5
-          </p>
-        </div>
-
-        {/* Card 4: Avaliação de Formadores */}
-        <div 
-          onClick={() => onNavigateModule('formadores')}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs hover:border-amber-400/80 transition-all cursor-pointer group"
-        >
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-xs font-medium">Avaliação formadores</span>
-            <GraduationCap size={16} className="text-blue-500" />
-          </div>
-          <p className="text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-            {kpis.avaliacaoFormadores > 0 ? kpis.avaliacaoFormadores.toFixed(1) : '—'}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Desempenho pedagógico
-          </p>
-        </div>
-
-        {/* Card 5: Formandos Avaliados */}
-        <div 
-          onClick={() => onNavigateModule('formandos')}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs hover:border-amber-400/80 transition-all cursor-pointer group"
-        >
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-xs font-medium">Formandos avaliados</span>
-            <Users size={16} className="text-indigo-500" />
-          </div>
-          <p className="text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-            {kpis.formandosAvaliados}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Pessoas físicas únicas
-          </p>
-        </div>
-
-        {/* Card 6: Certificados */}
-        <div 
-          onClick={() => onNavigateModule('certificados')}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs hover:border-amber-400/80 transition-all cursor-pointer group"
-        >
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-xs font-medium">Certificados</span>
-            <Award size={16} className="text-purple-500" />
-          </div>
-          <p className="text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-            {kpis.certificadosEmitidos > 0 ? kpis.certificadosEmitidos : '—'}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Emitidos com QR Code
-          </p>
-        </div>
-
-        {/* Card 7: Ocorrências ISO 9001 */}
-        <div 
-          onClick={() => onNavigateModule('qualidade')}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs hover:border-amber-400/80 transition-all cursor-pointer group"
-        >
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-xs font-medium">Ocorrências</span>
-            <AlertTriangle size={16} className="text-amber-500" />
-          </div>
-          <p className="text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-            {kpis.ocorrenciasTotal}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Qualidade & Desvios
-          </p>
-        </div>
-
-        {/* Card 8: Taxa de Recomendação */}
-        <div 
-          onClick={() => onNavigateModule('avaliacoes')}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs hover:border-amber-400/80 transition-all cursor-pointer group"
-        >
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-2">
-            <span className="text-xs font-medium">Recomendação</span>
-            <HeartHandshake size={16} className="text-rose-500" />
-          </div>
-          <p className="text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-            {kpis.taxaRecomendacao > 0 ? `${kpis.taxaRecomendacao}%` : '—'}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Respostas afirmativas
-          </p>
-        </div>
-      </div>
-
-      {/* 5. SELETOR DE MODOS DE VISUALIZAÇÃO ("Análise da formação" - Fiel à Maquete image_605a31ae.png) */}
-      <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4 shadow-xs">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">Análise da formação</h2>
-            <p className="text-xs text-slate-400 mt-0.5">Explorar dados através de:</p>
-          </div>
-          <span className="text-[10px] font-semibold tracking-wider uppercase px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
-            Dinâmico
-          </span>
-        </div>
-
-        {/* Grid dos 6 Modos de Apresentação */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
-          {[
-            { id: 'resumo' as ModoVisualizacao, label: 'Resumo', icon: LayoutGrid },
-            { id: 'graficos' as ModoVisualizacao, label: 'Gráficos', icon: BarChart2 },
-            { id: 'tabela' as ModoVisualizacao, label: 'Tabela', icon: TableIcon },
-            { id: 'cartoes' as ModoVisualizacao, label: 'Cartões', icon: CreditCard },
-            { id: 'progresso' as ModoVisualizacao, label: 'Progresso', icon: PieChart },
-            { id: 'calendario' as ModoVisualizacao, label: 'Calendário', icon: CalendarDays },
-          ].map(modo => {
-            const Icon = modo.icon;
-            const isSelected = modoVisualizacao === modo.id;
-
-            return (
+            {/* Popover Mais Filtros */}
+            <div className="relative" ref={moreFiltersRef}>
               <button
-                key={modo.id}
-                onClick={() => setModoVisualizacao(modo.id)}
-                className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all text-xs font-semibold ${
-                  isSelected
-                    ? 'border-amber-400 bg-amber-50/50 dark:bg-amber-950/20 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-850 text-slate-600 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-700'
+                type="button"
+                onClick={() => setShowMoreFilters(v => !v)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border transition-all ${
+                  activeExtraFiltersCount > 0
+                    ? 'border-[var(--fortis-primary)] text-[var(--fortis-primary)] bg-[var(--fortis-primary-soft)] font-semibold'
+                    : 'border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232] text-[#5B6B7C] dark:text-[#94A3B8] hover:border-slate-300'
                 }`}
               >
-                <Icon
-                  size={18}
-                  className="mb-1.5"
-                  style={{ color: isSelected ? 'var(--fortis-primary)' : undefined }}
-                />
-                <span>{modo.label}</span>
+                <SlidersHorizontal size={12} />
+                <span>Mais filtros</span>
+                {activeExtraFiltersCount > 0 && (
+                  <span className="w-4 h-4 rounded-full bg-[var(--fortis-primary)] text-white text-[10px] font-bold flex items-center justify-center">
+                    {activeExtraFiltersCount}
+                  </span>
+                )}
+                <ChevronDown size={12} className={showMoreFilters ? 'rotate-180 transition-transform' : ''} />
               </button>
-            );
-          })}
+
+              {showMoreFilters && (
+                <div className="absolute left-0 top-full mt-1.5 w-72 sm:w-80 p-3.5 bg-white dark:bg-[#152232] border border-[#E3E8EF] dark:border-[#223347] rounded-xl shadow-lg z-30 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+                    <span className="text-xs font-semibold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                      Filtros Adicionais
+                    </span>
+                    <button
+                      onClick={() => setShowMoreFilters(false)}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  {/* Estado do Curso */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8]">
+                      Estado do Curso
+                    </label>
+                    <select
+                      value={filtros.estadoCurso}
+                      onChange={e => setFiltros(f => ({ ...f, estadoCurso: e.target.value }))}
+                      className="w-full text-xs py-1 px-2 rounded-md border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
+                    >
+                      <option value="Todos">Todos</option>
+                      <option value="agendado">Agendado</option>
+                      <option value="em_andamento">Em Andamento</option>
+                      <option value="realizado">Realizado</option>
+                      <option value="cancelado">Cancelado</option>
+                    </select>
+                  </div>
+
+                  {/* Encerramento Formal */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8]">
+                      Encerramento Administrativo
+                    </label>
+                    <select
+                      value={filtros.encerrado}
+                      onChange={e => setFiltros(f => ({ ...f, encerrado: e.target.value }))}
+                      className="w-full text-xs py-1 px-2 rounded-md border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
+                    >
+                      <option value="Todos">Todos</option>
+                      <option value="apenas_abertos">Apenas Em Aberto</option>
+                      <option value="apenas_encerrados">Apenas Encerrados</option>
+                    </select>
+                  </div>
+
+                  {/* Formador */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8]">
+                      Formador
+                    </label>
+                    <select
+                      value={filtros.formadorId}
+                      onChange={e => setFiltros(f => ({ ...f, formadorId: e.target.value }))}
+                      className="w-full text-xs py-1 px-2 rounded-md border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9] truncate"
+                    >
+                      <option value="Todos">Todos os Formadores</option>
+                      {formadores.map(form => (
+                        <option key={form.id} value={form.id}>
+                          {form.nomeCompleto}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Pesquisa por Texto */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8]">
+                      Pesquisa rápida
+                    </label>
+                    <div className="relative">
+                      <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        value={filtros.pesquisaTexto || ''}
+                        onChange={e => setFiltros(f => ({ ...f, pesquisaTexto: e.target.value }))}
+                        placeholder="Nome ou sala..."
+                        className="w-full pl-7 pr-2 py-1 text-xs rounded-md border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9] dark:bg-[#0B111B] text-[#1B2A3A] dark:text-[#F1F5F9]"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Lado direito: Limpar filtros */}
+          {isFiltersDirty && (
+            <button
+              onClick={handleResetFilters}
+              className="text-xs text-[#5B6B7C] hover:text-[#D99B24] dark:hover:text-[#E8AA35] font-medium flex items-center gap-1 transition-colors"
+            >
+              <RotateCcw size={12} />
+              <span>Limpar filtros</span>
+            </button>
+          )}
         </div>
 
-        {/* CONTEÚDO DINÂMICO CONFORME O MODO SELECIONADO */}
-        <div className="pt-2">
-          {/* MODO 1: RESUMO (Distribuição e Evolução Mensal - Matching image_50b58b17.png) */}
-          {modoVisualizacao === 'resumo' && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Gráfico Circular: Estado das Ações */}
-                <div className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">Estado das ações</span>
-                    <span className="text-[10px] text-slate-400">Distribuição</span>
-                  </div>
-                  <div className="flex items-center justify-center gap-6 py-4">
-                    {/* SVG Donut Chart */}
-                    <div className="relative w-28 h-28">
-                      <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
-                        {/* Background track */}
-                        <circle cx="18" cy="18" r="14" fill="none" stroke="#E2E8F0" strokeWidth="4" className="dark:stroke-slate-800" />
-                        {/* Segments */}
-                        {(() => {
-                          const total = statusDistribution.reduce((acc, curr) => acc + curr.valor, 0) || 1;
-                          let accumulated = 0;
-                          return statusDistribution.map((item, idx) => {
-                            const percent = (item.valor / total) * 100;
-                            const strokeDasharray = `${percent} ${100 - percent}`;
-                            const strokeDashoffset = -accumulated;
-                            accumulated += percent;
-                            return (
-                              <circle
-                                key={idx}
-                                cx="18"
-                                cy="18"
-                                r="14"
-                                fill="none"
-                                stroke={item.cor}
-                                strokeWidth="4"
-                                strokeDasharray={strokeDasharray}
-                                strokeDashoffset={strokeDashoffset}
-                                strokeLinecap="round"
-                              />
-                            );
-                          });
-                        })()}
-                      </svg>
-                      <div className="absolute inset-0 flex flex-col items-center justify-center">
-                        <span className="text-sm font-bold text-slate-800 dark:text-slate-200">{kpis.totalAcoes}</span>
-                        <span className="text-[9px] text-slate-400 uppercase">Ações</span>
+        {/* Chips de filtros ativos */}
+        {isFiltersDirty && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-[#E3E8EF]/60 dark:border-[#223347]/60 text-[11px]">
+            <span className="text-[#5B6B7C] dark:text-[#94A3B8] font-medium text-[10px] uppercase tracking-wider mr-1">
+              Ativos:
+            </span>
+
+            {filtros.ano !== 'Todos' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[#1B2A3A] dark:text-[#F1F5F9] font-medium">
+                Ano: {filtros.ano}
+                <button
+                  onClick={() => setFiltros(f => ({ ...f, ano: 'Todos' }))}
+                  className="hover:text-red-500"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+
+            {filtros.meses !== 'Todos' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[#1B2A3A] dark:text-[#F1F5F9] font-medium">
+                Mês: {mesesNomes.find(m => m.id === filtros.meses)?.label}
+                <button
+                  onClick={() => setFiltros(f => ({ ...f, meses: 'Todos' }))}
+                  className="hover:text-red-500"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+
+            {filtros.periodo !== 'Todos' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[#1B2A3A] dark:text-[#F1F5F9] font-medium capitalize">
+                Período: {filtros.periodo}
+                <button
+                  onClick={() => setFiltros(f => ({ ...f, periodo: 'Todos' }))}
+                  className="hover:text-red-500"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+
+            {filtros.estadoCurso !== 'Todos' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[#1B2A3A] dark:text-[#F1F5F9] font-medium capitalize">
+                Estado: {filtros.estadoCurso.replace('_', ' ')}
+                <button
+                  onClick={() => setFiltros(f => ({ ...f, estadoCurso: 'Todos' }))}
+                  className="hover:text-red-500"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+
+            {filtros.encerrado !== 'Todos' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[#1B2A3A] dark:text-[#F1F5F9] font-medium">
+                {filtros.encerrado === 'apenas_encerrados' ? 'Encerrados' : 'Em Aberto'}
+                <button
+                  onClick={() => setFiltros(f => ({ ...f, encerrado: 'Todos' }))}
+                  className="hover:text-red-500"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+
+            {filtros.formadorId !== 'Todos' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[#1B2A3A] dark:text-[#F1F5F9] font-medium">
+                Formador
+                <button
+                  onClick={() => setFiltros(f => ({ ...f, formadorId: 'Todos' }))}
+                  className="hover:text-red-500"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+
+            {filtros.pesquisaTexto && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[#1B2A3A] dark:text-[#F1F5F9] font-medium">
+                "{filtros.pesquisaTexto}"
+                <button
+                  onClick={() => setFiltros(f => ({ ...f, pesquisaTexto: '' }))}
+                  className="hover:text-red-500"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 3. KPIS EM DOIS NÍVEIS */}
+      <div className="space-y-3">
+        {/* Nível 1: 4 Cards Principais */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+          <StatCard
+            label="Total de Ações"
+            value={kpis.totalAcoes}
+            subtext={`Ano ${filtros.ano === 'Todos' ? 'Global' : filtros.ano} · ${cursosFiltrados.length} registadas`}
+            icon={BookOpen}
+            onClick={() => onNavigateModule('cursos')}
+          />
+          <StatCard
+            label="Taxa de Aprovação"
+            value={kpis.formandosAvaliados > 0 ? `${kpis.taxaAprovacao}%` : 'Sem dados'}
+            subtext="Desduplicado por formando"
+            icon={TrendingUp}
+            trend={
+              kpis.formandosAvaliados > 0
+                ? { value: `${kpis.taxaAprovacao}%`, isPositive: kpis.taxaAprovacao >= 70 }
+                : undefined
+            }
+            onClick={() => onNavigateModule('avaliacoes')}
+          />
+          <StatCard
+            label="Satisfação Média"
+            value={kpis.satisfacaoMedia > 0 ? kpis.satisfacaoMedia.toFixed(1) : 'Sem dados'}
+            subtext="Escala de 1 a 5"
+            icon={Star}
+            onClick={() => onNavigateModule('avaliacoes')}
+          />
+          <StatCard
+            label="Certificados Emitidos"
+            value={kpis.certificadosEmitidos > 0 ? kpis.certificadosEmitidos : 'Sem dados'}
+            subtext="Emitidos com validação QR"
+            icon={Award}
+            onClick={() => onNavigateModule('certificados')}
+          />
+        </div>
+
+        {/* Nível 2: Faixa de 4 Métricas Secundárias Compactas */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {/* Card Secundário 1 */}
+          <div
+            onClick={() => onNavigateModule('formadores')}
+            className="p-3 bg-white dark:bg-[#152232] border border-[#E3E8EF] dark:border-[#223347] rounded-xl flex items-center justify-between cursor-pointer hover:border-[var(--fortis-primary)] transition-colors"
+          >
+            <div>
+              <span className="text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8] uppercase block">
+                Avaliação Formadores
+              </span>
+              <span className="text-lg font-bold text-[#1B2A3A] dark:text-[#F1F5F9] tabular-nums">
+                {kpis.avaliacaoFormadores > 0 ? kpis.avaliacaoFormadores.toFixed(1) : '—'}
+              </span>
+              <span className="text-[10px] text-[#5B6B7C] dark:text-[#94A3B8] block">Desempenho pedagógico</span>
+            </div>
+            <div className="w-8 h-8 rounded-lg bg-[var(--fortis-primary-soft)] text-[var(--fortis-primary)] flex items-center justify-center">
+              <GraduationCap size={16} />
+            </div>
+          </div>
+
+          {/* Card Secundário 2 */}
+          <div
+            onClick={() => onNavigateModule('formandos')}
+            className="p-3 bg-white dark:bg-[#152232] border border-[#E3E8EF] dark:border-[#223347] rounded-xl flex items-center justify-between cursor-pointer hover:border-[var(--fortis-primary)] transition-colors"
+          >
+            <div>
+              <span className="text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8] uppercase block">
+                Formandos Avaliados
+              </span>
+              <span className="text-lg font-bold text-[#1B2A3A] dark:text-[#F1F5F9] tabular-nums">
+                {kpis.formandosAvaliados}
+              </span>
+              <span className="text-[10px] text-[#5B6B7C] dark:text-[#94A3B8] block">Pessoas singulares</span>
+            </div>
+            <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+              <Users size={16} />
+            </div>
+          </div>
+
+          {/* Card Secundário 3 */}
+          <div
+            onClick={() => onNavigateModule('qualidade')}
+            className="p-3 bg-white dark:bg-[#152232] border border-[#E3E8EF] dark:border-[#223347] rounded-xl flex items-center justify-between cursor-pointer hover:border-[var(--fortis-primary)] transition-colors"
+          >
+            <div>
+              <span className="text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8] uppercase block">
+                Ocorrências de Qualidade
+              </span>
+              <span className="text-lg font-bold text-[#1B2A3A] dark:text-[#F1F5F9] tabular-nums">
+                {kpis.ocorrenciasTotal}
+              </span>
+              <span className="text-[10px] text-[#5B6B7C] dark:text-[#94A3B8] block">ISO 9001 e Desvios</span>
+            </div>
+            <div className="w-8 h-8 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+              <AlertTriangle size={16} />
+            </div>
+          </div>
+
+          {/* Card Secundário 4 */}
+          <div
+            onClick={() => onNavigateModule('avaliacoes')}
+            className="p-3 bg-white dark:bg-[#152232] border border-[#E3E8EF] dark:border-[#223347] rounded-xl flex items-center justify-between cursor-pointer hover:border-[var(--fortis-primary)] transition-colors"
+          >
+            <div>
+              <span className="text-[11px] font-semibold text-[#5B6B7C] dark:text-[#94A3B8] uppercase block">
+                Taxa de Recomendação
+              </span>
+              <span className="text-lg font-bold text-[#1B2A3A] dark:text-[#F1F5F9] tabular-nums">
+                {kpis.taxaRecomendacao > 0 ? `${kpis.taxaRecomendacao}%` : '—'}
+              </span>
+              <span className="text-[10px] text-[#5B6B7C] dark:text-[#94A3B8] block">Respostas afirmativas</span>
+            </div>
+            <div className="w-8 h-8 rounded-lg bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center">
+              <HeartHandshake size={16} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. DUAS COLUNAS PRINCIPAIS: 2/3 (Analítica) + 1/3 (Operacional) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+        
+        {/* COLUNA ESQUERDA (2/3 — 8 colunas): Cartão único "Análise da formação" */}
+        <div className="lg:col-span-8 space-y-4">
+          <Card padding="md" className="space-y-4">
+            {/* Cabeçalho do Cartão Analítico */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-[#E3E8EF] dark:border-[#223347]">
+              <div>
+                <h2 className="text-sm font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                  Análise da formação
+                </h2>
+                <p className="text-xs text-[#5B6B7C] dark:text-[#94A3B8]">
+                  Exploração multidimensional de indicadores e desempenho
+                </p>
+              </div>
+
+              {/* SegmentedControl com os 6 Modos de Visualização */}
+              <SegmentedControl
+                options={modosVisualizacaoOptions}
+                value={modoVisualizacao}
+                onChange={v => setModoVisualizacao(v as ModoVisualizacao)}
+                size="sm"
+              />
+            </div>
+
+            {/* As 6 Áreas Analíticas como Tabs Sublinhadas */}
+            <Tabs
+              tabs={areasAnaliticasTabs}
+              activeTab={areaAtiva}
+              onChange={id => setAreaAtiva(id as AreaAnalitica)}
+            />
+
+            {/* CONTEÚDO ANALÍTICO DINÂMICO CONFORME MODO E ÁREA */}
+            <div className="pt-2">
+              {/* MODO 1: RESUMO */}
+              {modoVisualizacao === 'resumo' && (
+                <div className="space-y-4">
+                  {/* Visão Geral: Distribuição das Ações + Aprovados vs Reprovados */}
+                  {areaAtiva === 'visao_geral' && (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Gráfico Donut de Estado das Ações */}
+                        <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60">
+                          <div className="flex items-center justify-between mb-3">
+                            <span className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                              Estado das ações
+                            </span>
+                            <span className="text-[10px] text-[#5B6B7C] dark:text-[#94A3B8]">Distribuição</span>
+                          </div>
+
+                          <div className="flex items-center justify-center gap-6 py-3">
+                            <div className="relative w-28 h-28">
+                              <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+                                <circle
+                                  cx="18"
+                                  cy="18"
+                                  r="14"
+                                  fill="none"
+                                  stroke="#E3E8EF"
+                                  strokeWidth="4"
+                                  className="dark:stroke-[#223347]"
+                                />
+                                {(() => {
+                                  const total = statusDistribution.reduce((acc, curr) => acc + curr.valor, 0) || 1;
+                                  let accumulated = 0;
+                                  return statusDistribution.map((item, idx) => {
+                                    const percent = (item.valor / total) * 100;
+                                    const strokeDasharray = `${percent} ${100 - percent}`;
+                                    const strokeDashoffset = -accumulated;
+                                    accumulated += percent;
+                                    return (
+                                      <circle
+                                        key={idx}
+                                        cx="18"
+                                        cy="18"
+                                        r="14"
+                                        fill="none"
+                                        stroke={item.cor}
+                                        strokeWidth="4"
+                                        strokeDasharray={strokeDasharray}
+                                        strokeDashoffset={strokeDashoffset}
+                                        strokeLinecap="round"
+                                      />
+                                    );
+                                  });
+                                })()}
+                              </svg>
+                              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                                <span className="text-sm font-bold text-[#1B2A3A] dark:text-[#F1F5F9] tabular-nums">
+                                  {kpis.totalAcoes}
+                                </span>
+                                <span className="text-[9px] text-[#5B6B7C] uppercase">Ações</span>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1.5 text-xs">
+                              {statusDistribution.map((item, idx) => (
+                                <div key={idx} className="flex items-center gap-2">
+                                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: item.cor }} />
+                                  <span className="text-[#5B6B7C] dark:text-[#94A3B8] font-medium">{item.nome}:</span>
+                                  <span className="font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">{item.valor}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Comparativo de Desempenho Pedagógico */}
+                        <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60 flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center justify-between mb-3">
+                              <span className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                                Aprovados vs. Reprovados
+                              </span>
+                              <span className="text-[10px] text-[#5B6B7C] dark:text-[#94A3B8]">Desempenho</span>
+                            </div>
+
+                            <div className="space-y-3 pt-1">
+                              <div>
+                                <div className="flex justify-between text-xs font-medium mb-1">
+                                  <span className="text-[#16866A] dark:text-[#20A785] flex items-center gap-1.5">
+                                    <CheckCircle2 size={13} />
+                                    Aprovados
+                                  </span>
+                                  <span className="font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">
+                                    {kpis.taxaAprovacao}%
+                                  </span>
+                                </div>
+                                <div className="w-full h-2.5 rounded-full bg-[#E3E8EF] dark:bg-[#223347] overflow-hidden">
+                                  <div
+                                    className="h-full bg-[#16866A] rounded-full transition-all duration-500"
+                                    style={{ width: `${kpis.taxaAprovacao}%` }}
+                                  />
+                                </div>
+                              </div>
+
+                              <div>
+                                <div className="flex justify-between text-xs font-medium mb-1">
+                                  <span className="text-[#D32F2F] dark:text-[#EF4444] flex items-center gap-1.5">
+                                    <ShieldAlert size={13} />
+                                    Reprovados ou Pendentes
+                                  </span>
+                                  <span className="font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">
+                                    {Math.max(0, 100 - kpis.taxaAprovacao)}%
+                                  </span>
+                                </div>
+                                <div className="w-full h-2.5 rounded-full bg-[#E3E8EF] dark:bg-[#223347] overflow-hidden">
+                                  <div
+                                    className="h-full bg-[#D32F2F] rounded-full transition-all duration-500"
+                                    style={{ width: `${Math.max(0, 100 - kpis.taxaAprovacao)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <p className="text-[11px] text-[#5B6B7C] dark:text-[#94A3B8] mt-3">
+                            Fórmula auditada com desduplicação por formando em avaliações finais válidas.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Evolução Mensal das Formações */}
+                      <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60">
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <span className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                              Evolução temporal das formações
+                            </span>
+                            <p className="text-[11px] text-[#5B6B7C] dark:text-[#94A3B8]">
+                              Volume de ações calendarizadas por mês
+                            </p>
+                          </div>
+                          <span className="text-xs font-bold tabular-nums px-2 py-0.5 rounded bg-[var(--fortis-primary-soft)] text-[var(--fortis-primary)]">
+                            Ano {filtros.ano}
+                          </span>
+                        </div>
+
+                        <div className="pt-2">
+                          <div className="flex items-end justify-between gap-1.5 h-28 px-1">
+                            {monthlyEvolution.map((item, idx) => {
+                              const maxVal = Math.max(...monthlyEvolution.map(m => m.acoes), 4);
+                              const heightPercent = Math.max(12, Math.round((item.acoes / maxVal) * 100));
+
+                              return (
+                                <div key={idx} className="flex-1 flex flex-col items-center gap-1.5 group cursor-pointer">
+                                  <span className="text-[10px] font-bold text-[#1B2A3A] dark:text-[#F1F5F9] opacity-0 group-hover:opacity-100 transition-opacity tabular-nums">
+                                    {item.acoes}
+                                  </span>
+                                  <div
+                                    className="w-full rounded-md transition-all group-hover:brightness-110 shadow-xs"
+                                    style={{
+                                      height: `${heightPercent}%`,
+                                      backgroundColor: 'var(--fortis-primary)',
+                                    }}
+                                  />
+                                  <span className="text-[10px] text-[#5B6B7C] dark:text-[#94A3B8] font-medium">{item.mes}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Formandos */}
+                  {areaAtiva === 'formandos' && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                          <span className="text-[11px] text-[#5B6B7C] block">Inscrições Totais</span>
+                          <span className="text-xl font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">
+                            {cursosFiltrados.reduce((acc, c) => acc + (c.vagasMaximas - 2), 0)}
+                          </span>
+                        </div>
+                        <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                          <span className="text-[11px] text-[#5B6B7C] block">Assiduidade Média</span>
+                          <span className="text-xl font-bold tabular-nums text-[#16866A]">
+                            89%
+                          </span>
+                        </div>
+                        <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                          <span className="text-[11px] text-[#5B6B7C] block">Desistências</span>
+                          <span className="text-xl font-bold tabular-nums text-[#D32F2F]">
+                            3.2%
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60">
+                        <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] mb-3">
+                          Ocupação de Vagas por Curso Ativo
+                        </h3>
+                        <div className="space-y-2.5">
+                          {cursosFiltrados.slice(0, 4).map(c => (
+                            <div key={c.id} className="space-y-1">
+                              <div className="flex justify-between text-xs">
+                                <span className="font-medium text-[#1B2A3A] dark:text-[#F1F5F9] truncate">{c.nomeCurso}</span>
+                                <span className="font-bold tabular-nums text-[#5B6B7C]">{c.vagasMaximas - 2} / {c.vagasMaximas} vagas</span>
+                              </div>
+                              <div className="w-full h-2 rounded-full bg-[#E3E8EF] dark:bg-[#223347] overflow-hidden">
+                                <div className="h-full bg-[var(--fortis-primary)] rounded-full" style={{ width: `${Math.round(((c.vagasMaximas - 2) / c.vagasMaximas) * 100)}%` }} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
+                  )}
 
-                    <div className="space-y-1.5 text-xs">
-                      {statusDistribution.map((item, idx) => (
-                        <div key={idx} className="flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: item.cor }} />
-                          <span className="text-slate-600 dark:text-slate-300 font-medium">{item.nome}:</span>
-                          <span className="font-bold tabular-nums text-slate-900 dark:text-slate-100">{item.valor}</span>
+                  {/* Formadores */}
+                  {areaAtiva === 'formadores' && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                          <span className="text-[11px] text-[#5B6B7C] block">Formadores Ativos</span>
+                          <span className="text-xl font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">
+                            {formadores.length}
+                          </span>
+                        </div>
+                        <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                          <span className="text-[11px] text-[#5B6B7C] block">Horas Ministradas</span>
+                          <span className="text-xl font-bold tabular-nums text-[var(--fortis-primary)]">
+                            480h
+                          </span>
+                        </div>
+                        <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                          <span className="text-[11px] text-[#5B6B7C] block">Avaliação Média Docente</span>
+                          <span className="text-xl font-bold tabular-nums text-[#16866A]">
+                            {kpis.avaliacaoFormadores > 0 ? `${kpis.avaliacaoFormadores.toFixed(1)} / 5` : '—'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60">
+                        <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] mb-3">
+                          Quadro de Formadores em Ação
+                        </h3>
+                        <div className="divide-y divide-[#E3E8EF] dark:divide-[#223347]">
+                          {formadores.map(form => (
+                            <div key={form.id} className="py-2.5 flex items-center justify-between text-xs">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-7 h-7 rounded-full bg-[var(--fortis-primary-soft)] text-[var(--fortis-primary)] flex items-center justify-center font-bold text-[11px]">
+                                  {form.nomeCompleto[0]}
+                                </div>
+                                <div>
+                                  <p className="font-semibold text-[#1B2A3A] dark:text-[#F1F5F9]">{form.nomeCompleto}</p>
+                                  <p className="text-[10px] text-[#5B6B7C]">{form.email}</p>
+                                </div>
+                              </div>
+                              <span className="font-mono text-xs font-semibold text-[#16866A]">
+                                4.8 / 5.0 ★
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Financeiro */}
+                  {areaAtiva === 'financeiro' && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                          <span className="text-[11px] text-[#5B6B7C] block">Orçamento Global Alocado</span>
+                          <span className="text-lg font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">
+                            {cursosFiltrados.reduce((acc, c) => acc + c.orcamentoPrevisto, 0).toLocaleString()} Kz
+                          </span>
+                        </div>
+                        <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                          <span className="text-[11px] text-[#5B6B7C] block">Custos Totais Registados</span>
+                          <span className="text-lg font-bold tabular-nums text-[#D32F2F]">
+                            {financeiro.filter(f => f.tipo !== 'receita').reduce((acc, f) => acc + f.valor, 0).toLocaleString()} Kz
+                          </span>
+                        </div>
+                        <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                          <span className="text-[11px] text-[#5B6B7C] block">Receitas Cobradas</span>
+                          <span className="text-lg font-bold tabular-nums text-[#16866A]">
+                            {financeiro.filter(f => f.tipo === 'receita').reduce((acc, f) => acc + f.valor, 0).toLocaleString()} Kz
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60">
+                        <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] mb-3">
+                          Últimos Registos Financeiros
+                        </h3>
+                        <div className="divide-y divide-[#E3E8EF] dark:divide-[#223347]">
+                          {financeiro.slice(0, 4).map(f => (
+                            <div key={f.id} className="py-2 flex items-center justify-between text-xs">
+                              <div>
+                                <p className="font-medium text-[#1B2A3A] dark:text-[#F1F5F9]">{f.descricao}</p>
+                                <p className="text-[10px] text-[#5B6B7C]">{f.data} · {f.categoria.replace('_', ' ')}</p>
+                              </div>
+                              <span className={`font-mono font-bold tabular-nums ${f.tipo === 'receita' ? 'text-[#16866A]' : 'text-[#D32F2F]'}`}>
+                                {f.tipo === 'receita' ? '+' : '-'}{f.valor.toLocaleString()} Kz
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Qualidade */}
+                  {areaAtiva === 'qualidade' && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                          <span className="text-[11px] text-[#5B6B7C] block">Conformidade ISO 9001</span>
+                          <span className="text-xl font-bold tabular-nums text-[#16866A]">
+                            94.2%
+                          </span>
+                        </div>
+                        <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                          <span className="text-[11px] text-[#5B6B7C] block">Ocorrências Abertas</span>
+                          <span className="text-xl font-bold tabular-nums text-[#D99B24]">
+                            {ocorrencias.filter(o => o.estado !== 'encerrada').length}
+                          </span>
+                        </div>
+                        <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                          <span className="text-[11px] text-[#5B6B7C] block">Ações Corretivas Fechadas</span>
+                          <span className="text-xl font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">
+                            {ocorrencias.filter(o => o.estado === 'encerrada').length}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60">
+                        <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] mb-3">
+                          Estado das Não Conformidades & Desvios
+                        </h3>
+                        <div className="space-y-2">
+                          {ocorrencias.slice(0, 3).map(o => (
+                            <div key={o.id} className="p-2.5 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232] flex items-center justify-between text-xs">
+                              <div>
+                                <span className="font-mono text-[10px] text-[#5B6B7C]">{o.codigo}</span>
+                                <p className="font-semibold text-[#1B2A3A] dark:text-[#F1F5F9] line-clamp-1">{o.descricaoProblema}</p>
+                              </div>
+                              <StatusBadge variant={o.estado === 'encerrada' ? 'success' : 'warning'}>
+                                {o.estado.replace('_', ' ')}
+                              </StatusBadge>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Temporal */}
+                  {areaAtiva === 'temporal' && (
+                    <div className="space-y-4">
+                      <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60">
+                        <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] mb-1">
+                          Sazonalidade e Distribuição Trimestral
+                        </h3>
+                        <p className="text-[11px] text-[#5B6B7C] mb-4">
+                          Agrupamento de ações por trimestre em {filtros.ano}
+                        </p>
+                        <div className="grid grid-cols-4 gap-3 text-center">
+                          <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                            <span className="text-[11px] font-semibold text-[#5B6B7C] block">T1 (Jan-Mar)</span>
+                            <span className="text-lg font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">4 Ações</span>
+                          </div>
+                          <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                            <span className="text-[11px] font-semibold text-[#5B6B7C] block">T2 (Abr-Jun)</span>
+                            <span className="text-lg font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">8 Ações</span>
+                          </div>
+                          <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                            <span className="text-[11px] font-semibold text-[#5B6B7C] block">T3 (Jul-Set)</span>
+                            <span className="text-lg font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">11 Ações</span>
+                          </div>
+                          <div className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232]">
+                            <span className="text-[11px] font-semibold text-[#5B6B7C] block">T4 (Out-Dez)</span>
+                            <span className="text-lg font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">10 Ações</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* MODO 2: GRÁFICOS */}
+              {modoVisualizacao === 'graficos' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60">
+                    <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] mb-2">
+                      Cursos por Categoria Formativa
+                    </h3>
+                    <div className="space-y-3 pt-2">
+                      {[
+                        { cat: 'Gestão & Liderança', val: 12, pct: 60 },
+                        { cat: 'Tecnologias de Informação', val: 8, pct: 40 },
+                        { cat: 'Qualidade ISO 9001', val: 7, pct: 35 },
+                        { cat: 'Segurança & Ambiente', val: 6, pct: 30 },
+                      ].map((item, idx) => (
+                        <div key={idx} className="space-y-1">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-[#5B6B7C] dark:text-[#94A3B8]">{item.cat}</span>
+                            <span className="font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">{item.val} ações</span>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-[#E3E8EF] dark:bg-[#223347] overflow-hidden">
+                            <div className="h-full bg-[var(--fortis-primary)] rounded-full" style={{ width: `${item.pct}%` }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60">
+                    <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] mb-2">
+                      Assiduidade Média por Turno
+                    </h3>
+                    <div className="space-y-3 pt-2">
+                      {[
+                        { turno: 'Manhã', val: 92, cor: 'bg-[#16866A]' },
+                        { turno: 'Tarde', val: 88, cor: 'bg-[var(--fortis-primary)]' },
+                        { turno: 'Noite', val: 84, cor: 'bg-[#D99B24]' },
+                        { turno: 'Sábado', val: 95, cor: 'bg-indigo-500' },
+                      ].map((t, idx) => (
+                        <div key={idx} className="space-y-1">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-[#5B6B7C] dark:text-[#94A3B8]">Turno da {t.turno}</span>
+                            <span className="font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">{t.val}% assiduidade</span>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-[#E3E8EF] dark:bg-[#223347] overflow-hidden">
+                            <div className={`h-full ${t.cor} rounded-full`} style={{ width: `${t.val}%` }} />
+                          </div>
                         </div>
                       ))}
                     </div>
                   </div>
                 </div>
+              )}
 
-                {/* Gráfico Comparativo: Aprovados vs. Reprovados */}
-                <div className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">Aprovados vs. Reprovados</span>
-                    <span className="text-[10px] text-slate-400">Desempenho</span>
-                  </div>
-                  <div className="py-3 space-y-3">
-                    <div>
-                      <div className="flex justify-between text-xs font-medium mb-1">
-                        <span className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
-                          <CheckCircle2 size={13} />
-                          Aprovados
-                        </span>
-                        <span className="font-bold tabular-nums">{kpis.taxaAprovacao}%</span>
-                      </div>
-                      <div className="w-full h-2.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-                        <div 
-                          className="h-full bg-emerald-500 rounded-full transition-all duration-500"
-                          style={{ width: `${kpis.taxaAprovacao}%` }}
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="flex justify-between text-xs font-medium mb-1">
-                        <span className="text-rose-600 dark:text-rose-400 flex items-center gap-1.5">
-                          <ShieldAlert size={13} />
-                          Reprovados ou Pendentes
-                        </span>
-                        <span className="font-bold tabular-nums">{100 - kpis.taxaAprovacao}%</span>
-                      </div>
-                      <div className="w-full h-2.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-                        <div 
-                          className="h-full bg-rose-500 rounded-full transition-all duration-500"
-                          style={{ width: `${Math.max(0, 100 - kpis.taxaAprovacao)}%` }}
-                        />
-                      </div>
-                    </div>
-
-                    <p className="text-[11px] text-slate-400 mt-2">
-                      Baseado em avaliações finais de conhecimentos registadas no período filtrado.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Evolução Mensal (As Barras Douradas da Maquete image_605a31ae.png) */}
-              <div className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">Evolução das formações</span>
-                    <p className="text-[11px] text-slate-400">Ações por mês</p>
-                  </div>
-                  <span className="text-xs font-bold tabular-nums px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300">
-                    {filtros.ano}
-                  </span>
-                </div>
-
-                {/* SVG Bar Chart Interativo com Cor Dourada */}
-                <div className="pt-2">
-                  <div className="flex items-end justify-between gap-1.5 h-28 px-1">
-                    {monthlyEvolution.map((item, idx) => {
-                      const maxVal = Math.max(...monthlyEvolution.map(m => m.acoes), 4);
-                      const heightPercent = Math.max(12, Math.round((item.acoes / maxVal) * 100));
-
-                      return (
-                        <div key={idx} className="flex-1 flex flex-col items-center gap-1.5 group cursor-pointer">
-                          <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity tabular-nums">
-                            {item.acoes}
-                          </span>
-                          <div
-                            className="w-full rounded-md transition-all group-hover:brightness-110 shadow-xs"
-                            style={{
-                              height: `${heightPercent}%`,
-                              backgroundColor: 'var(--fortis-primary)',
-                            }}
-                          />
-                          <span className="text-[10px] text-slate-400 font-medium">{item.mes}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* MODO 2: GRÁFICOS */}
-          {modoVisualizacao === 'graficos' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
-                <h3 className="text-xs font-bold text-slate-800 dark:text-slate-200 mb-2">Cursos por Categoria</h3>
-                <div className="space-y-2 pt-2">
-                  {['Gestão & Operações', 'Tecnologias de Informação', 'Qualidade & Auditoria', 'Segurança & Ambiente'].map((cat, idx) => {
-                    const count = cursosFiltrados.filter(c => {
-                      const catInfo = dataService.getCourses().find(curr => curr.id === c.id);
-                      return idx % 2 === 0 ? c.nomeCurso.includes('Gestão') : true;
-                    }).length;
-                    return (
-                      <div key={idx} className="space-y-1">
-                        <div className="flex justify-between text-xs text-slate-600 dark:text-slate-300">
-                          <span>{cat}</span>
-                          <span className="font-bold tabular-nums">{count} ações</span>
-                        </div>
-                        <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-                          <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.min(100, count * 25)}%` }} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
-                <h3 className="text-xs font-bold text-slate-800 dark:text-slate-200 mb-2">Assiduidade Média por Turno</h3>
-                <div className="space-y-3 pt-2">
-                  {[
-                    { turno: 'Manhã', val: 92, cor: 'bg-emerald-500' },
-                    { turno: 'Tarde', val: 88, cor: 'bg-blue-500' },
-                    { turno: 'Noite', val: 84, cor: 'bg-amber-500' },
-                  ].map((t, idx) => (
-                    <div key={idx} className="space-y-1">
-                      <div className="flex justify-between text-xs text-slate-600 dark:text-slate-300">
-                        <span>Turno da {t.turno}</span>
-                        <span className="font-bold tabular-nums">{t.val}% assiduidade</span>
-                      </div>
-                      <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-                        <div className={`h-full ${t.cor} rounded-full`} style={{ width: `${t.val}%` }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* MODO 3: TABELA */}
-          {modoVisualizacao === 'tabela' && (
-            <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-semibold border-b border-slate-200 dark:border-slate-800">
-                  <tr>
-                    <th className="py-2.5 px-3">Nome da Formação</th>
-                    <th className="py-2.5 px-3">Período</th>
-                    <th className="py-2.5 px-3">Data Início</th>
-                    <th className="py-2.5 px-3">Estado</th>
-                    <th className="py-2.5 px-3">Encerramento</th>
-                    <th className="py-2.5 px-3">Progresso</th>
-                    <th className="py-2.5 px-3 text-right">Ação</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
-                  {cursosFiltrados.map(curso => (
-                    <tr key={curso.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                      <td className="py-2.5 px-3 font-semibold text-slate-900 dark:text-slate-100">
-                        {curso.nomeCurso}
-                      </td>
-                      <td className="py-2.5 px-3 capitalize">{curso.periodo}</td>
-                      <td className="py-2.5 px-3 tabular-nums">{curso.dataInicio}</td>
-                      <td className="py-2.5 px-3">
-                        <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
-                          curso.estadoCurso === 'realizado' ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300' :
-                          curso.estadoCurso === 'em_andamento' ? 'bg-blue-100 dark:bg-blue-950/40 text-blue-800 dark:text-blue-300' :
-                          curso.estadoCurso === 'agendado' ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300' :
-                          'bg-red-100 text-red-800'
-                        }`}>
-                          {curso.estadoCurso.replace('_', ' ')}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        {curso.encerrado ? (
-                          <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">Encerrado</span>
-                        ) : (
-                          <span className="text-[11px] text-slate-400">Em Aberto</span>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-16 h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
-                            <div className="h-full bg-amber-500 rounded-full" style={{ width: `${curso.progressoPercent}%` }} />
-                          </div>
-                          <span className="tabular-nums text-[10px]">{curso.progressoPercent}%</span>
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        <button
-                          onClick={() => {
-                            onNavigateModule('cursos');
-                            onSelectCourse(curso.id);
-                          }}
-                          className="px-2.5 py-1 text-[11px] font-medium rounded text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/30 transition-colors"
-                        >
-                          Ver Detalhes
-                        </button>
-                      </td>
+              {/* MODO 3: TABELA */}
+              {modoVisualizacao === 'tabela' && (
+                <DataTable>
+                  <thead className="bg-[#F4F6F9] dark:bg-[#0B111B] text-[#5B6B7C] dark:text-[#94A3B8] font-semibold border-b border-[#E3E8EF] dark:border-[#223347]">
+                    <tr>
+                      <th className="py-2.5 px-3">Nome da Formação</th>
+                      <th className="py-2.5 px-3">Período / Sala</th>
+                      <th className="py-2.5 px-3">Data Início</th>
+                      <th className="py-2.5 px-3">Estado</th>
+                      <th className="py-2.5 px-3">Encerramento</th>
+                      <th className="py-2.5 px-3">Progresso</th>
+                      <th className="py-2.5 px-3 text-right">Ação</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  </thead>
+                  <tbody className="divide-y divide-[#E3E8EF] dark:divide-[#223347] text-[#1B2A3A] dark:text-[#F1F5F9]">
+                    {cursosFiltrados.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="py-8 text-center text-xs text-[#5B6B7C]">
+                          Nenhum curso encontrado com os filtros selecionados.
+                        </td>
+                      </tr>
+                    ) : (
+                      cursosFiltrados.map(curso => (
+                        <tr key={curso.id} className="hover:bg-[#F4F6F9]/50 dark:hover:bg-[#0B111B]/40 transition-colors">
+                          <td className="py-2.5 px-3 font-semibold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                            {curso.nomeCurso}
+                          </td>
+                          <td className="py-2.5 px-3 capitalize text-[#5B6B7C] dark:text-[#94A3B8]">
+                            {curso.periodo} · {curso.localSala}
+                          </td>
+                          <td className="py-2.5 px-3 tabular-nums font-mono text-xs">{curso.dataInicio}</td>
+                          <td className="py-2.5 px-3">
+                            <StatusBadge variant={getBadgeVariant(curso.estadoCurso)}>
+                              {curso.estadoCurso.replace('_', ' ')}
+                            </StatusBadge>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            {curso.encerrado ? (
+                              <StatusBadge variant="success">Encerrado</StatusBadge>
+                            ) : (
+                              <StatusBadge variant="neutral">Em Aberto</StatusBadge>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <div className="flex items-center gap-2">
+                              <div className="w-16 h-1.5 rounded-full bg-[#E3E8EF] dark:bg-[#223347] overflow-hidden">
+                                <div
+                                  className="h-full bg-[var(--fortis-secondary)] rounded-full"
+                                  style={{ width: `${curso.progressoPercent}%` }}
+                                />
+                              </div>
+                              <span className="tabular-nums font-mono text-[10px]">{curso.progressoPercent}%</span>
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-right">
+                            <button
+                              onClick={() => {
+                                onNavigateModule('cursos');
+                                onSelectCourse(curso.id);
+                              }}
+                              className="px-2.5 py-1 text-[11px] font-semibold rounded text-[var(--fortis-primary)] hover:bg-[var(--fortis-primary-soft)] transition-colors"
+                            >
+                              Ver Detalhes
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </DataTable>
+              )}
 
-          {/* MODO 4: CARTÕES */}
-          {modoVisualizacao === 'cartoes' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-              {cursosFiltrados.map(curso => (
-                <div
-                  key={curso.id}
-                  onClick={() => {
-                    onNavigateModule('cursos');
-                    onSelectCourse(curso.id);
-                  }}
-                  className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs hover:border-amber-400 transition-all cursor-pointer space-y-3"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-slate-100 line-clamp-1">
-                      {curso.nomeCurso}
-                    </h4>
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider shrink-0 ${
-                      curso.estadoCurso === 'realizado' ? 'bg-emerald-100 text-emerald-800' :
-                      curso.estadoCurso === 'em_andamento' ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'
-                    }`}>
-                      {curso.estadoCurso.replace('_', ' ')}
-                    </span>
-                  </div>
+              {/* MODO 4: CARTÕES */}
+              {modoVisualizacao === 'cartoes' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
+                  {cursosFiltrados.map(curso => (
+                    <div
+                      key={curso.id}
+                      onClick={() => {
+                        onNavigateModule('cursos');
+                        onSelectCourse(curso.id);
+                      }}
+                      className="p-3.5 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232] shadow-xs hover:border-[var(--fortis-primary)] transition-all cursor-pointer space-y-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <h4 className="font-bold text-xs text-[#1B2A3A] dark:text-[#F1F5F9] line-clamp-1">
+                          {curso.nomeCurso}
+                        </h4>
+                        <StatusBadge variant={getBadgeVariant(curso.estadoCurso)}>
+                          {curso.estadoCurso.replace('_', ' ')}
+                        </StatusBadge>
+                      </div>
 
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 space-y-1">
-                    <p className="flex items-center gap-1.5">
-                      <Clock size={12} />
-                      <span className="capitalize">{curso.periodo} · {curso.localSala}</span>
-                    </p>
-                    <p className="flex items-center gap-1.5">
-                      <Calendar size={12} />
-                      <span>{curso.dataInicio} até {curso.dataFim}</span>
-                    </p>
-                  </div>
+                      <div className="text-[11px] text-[#5B6B7C] dark:text-[#94A3B8] space-y-1">
+                        <p className="flex items-center gap-1.5 capitalize">
+                          <Clock size={12} />
+                          <span>Turno da {curso.periodo} · {curso.localSala}</span>
+                        </p>
+                        <p className="flex items-center gap-1.5 tabular-nums font-mono text-[10px]">
+                          <Calendar size={12} />
+                          <span>{curso.dataInicio} a {curso.dataFim}</span>
+                        </p>
+                      </div>
 
-                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-1 text-slate-500">
-                      <span>Progresso:</span>
-                      <span className="font-bold tabular-nums text-slate-800 dark:text-slate-200">{curso.progressoPercent}%</span>
-                    </div>
-                    <span className="text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1">
-                      Aceder <ChevronRight size={12} />
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* MODO 5: PROGRESSO E CONFORMIDADE */}
-          {modoVisualizacao === 'progresso' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 space-y-3">
-                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">Conformidade ISO 9001 das Ações</span>
-                <p className="text-xs text-slate-500">Indicadores de cumprimento dos requisitos documentais e operacionais:</p>
-                <div className="space-y-3 pt-2">
-                  {cursosFiltrados.slice(0, 4).map(c => (
-                    <div key={c.id} className="space-y-1">
-                      <div className="flex justify-between text-xs font-medium">
-                        <span className="truncate">{c.nomeCurso}</span>
-                        <span className="font-bold tabular-nums" style={{ color: c.conformidadePercent >= 90 ? '#10B981' : '#F59E0B' }}>
-                          {c.conformidadePercent}%
+                      <div className="pt-2 border-t border-[#E3E8EF] dark:border-[#223347] flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-1 text-[#5B6B7C]">
+                          <span>Progresso:</span>
+                          <span className="font-bold tabular-nums text-[#1B2A3A] dark:text-[#F1F5F9]">{curso.progressoPercent}%</span>
+                        </div>
+                        <span className="text-[var(--fortis-primary)] font-semibold flex items-center gap-1 text-[11px]">
+                          Aceder <ChevronRight size={12} />
                         </span>
                       </div>
-                      <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-                        <div
-                          className="h-full rounded-full transition-all"
-                          style={{
-                            width: `${c.conformidadePercent}%`,
-                            backgroundColor: c.conformidadePercent >= 90 ? '#10B981' : '#F59E0B',
-                          }}
-                        />
-                      </div>
                     </div>
                   ))}
                 </div>
-              </div>
+              )}
 
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 space-y-3">
-                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">Metas Pedagógicas Concluídas</span>
-                <p className="text-xs text-slate-500">Aproveitamento e validação de competências:</p>
-                <div className="flex items-center justify-around py-4">
-                  <div className="text-center">
-                    <div className="w-20 h-20 rounded-full border-4 border-emerald-500 flex items-center justify-center font-bold text-lg text-emerald-600 dark:text-emerald-400">
-                      {kpis.taxaAprovacao}%
+              {/* MODO 5: PROGRESSO E CONFORMIDADE */}
+              {modoVisualizacao === 'progresso' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60 space-y-3">
+                    <span className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                      Conformidade ISO 9001 das Ações
+                    </span>
+                    <p className="text-xs text-[#5B6B7C]">
+                      Cumprimento rigoroso dos requisitos documentais e operacionais:
+                    </p>
+                    <div className="space-y-3 pt-2">
+                      {cursosFiltrados.slice(0, 4).map(c => (
+                        <div key={c.id} className="space-y-1">
+                          <div className="flex justify-between text-xs font-medium">
+                            <span className="truncate text-[#1B2A3A] dark:text-[#F1F5F9]">{c.nomeCurso}</span>
+                            <span
+                              className="font-bold tabular-nums"
+                              style={{ color: c.conformidadePercent >= 90 ? '#16866A' : '#D99B24' }}
+                            >
+                              {c.conformidadePercent}%
+                            </span>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-[#E3E8EF] dark:bg-[#223347] overflow-hidden">
+                            <div
+                              className="h-full rounded-full transition-all"
+                              style={{
+                                width: `${c.conformidadePercent}%`,
+                                backgroundColor: c.conformidadePercent >= 90 ? '#16866A' : '#D99B24',
+                              }}
+                            />
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    <span className="block text-xs font-semibold mt-2">Aprovação</span>
                   </div>
-                  <div className="text-center">
-                    <div className="w-20 h-20 rounded-full border-4 border-blue-500 flex items-center justify-center font-bold text-lg text-blue-600 dark:text-blue-400">
-                      89%
+
+                  <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60 space-y-3">
+                    <span className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                      Metas Pedagógicas Concluídas
+                    </span>
+                    <p className="text-xs text-[#5B6B7C]">
+                      Aproveitamento e validação de competências dos formandos:
+                    </p>
+                    <div className="flex items-center justify-around py-4">
+                      <div className="text-center">
+                        <div className="w-20 h-20 rounded-full border-4 border-[#16866A] flex items-center justify-center font-bold text-lg text-[#16866A] tabular-nums">
+                          {kpis.taxaAprovacao}%
+                        </div>
+                        <span className="block text-xs font-semibold mt-2 text-[#1B2A3A] dark:text-[#F1F5F9]">Aprovação</span>
+                      </div>
+                      <div className="text-center">
+                        <div className="w-20 h-20 rounded-full border-4 border-[var(--fortis-primary)] flex items-center justify-center font-bold text-lg text-[var(--fortis-primary)] tabular-nums">
+                          89%
+                        </div>
+                        <span className="block text-xs font-semibold mt-2 text-[#1B2A3A] dark:text-[#F1F5F9]">Assiduidade</span>
+                      </div>
+                      <div className="text-center">
+                        <div className="w-20 h-20 rounded-full border-4 border-[#D99B24] flex items-center justify-center font-bold text-lg text-[#D99B24] tabular-nums">
+                          {kpis.taxaRecomendacao}%
+                        </div>
+                        <span className="block text-xs font-semibold mt-2 text-[#1B2A3A] dark:text-[#F1F5F9]">Recomendação</span>
+                      </div>
                     </div>
-                    <span className="block text-xs font-semibold mt-2">Assiduidade</span>
-                  </div>
-                  <div className="text-center">
-                    <div className="w-20 h-20 rounded-full border-4 border-amber-500 flex items-center justify-center font-bold text-lg text-amber-600 dark:text-amber-400">
-                      {kpis.taxaRecomendacao}%
-                    </div>
-                    <span className="block text-xs font-semibold mt-2">Recomendação</span>
                   </div>
                 </div>
-              </div>
-            </div>
-          )}
+              )}
 
-          {/* MODO 6: CALENDÁRIO */}
-          {modoVisualizacao === 'calendario' && (
-            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
-              <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">Agenda de Novembro de 2026</span>
-                <span className="text-xs text-slate-400">Horários e Salas</span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {cursosFiltrados.map(curso => (
-                  <div key={curso.id} className="p-3 rounded-lg border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wide">
-                        {curso.periodo}
-                      </span>
-                      <span className="text-[10px] text-slate-400">{curso.localSala}</span>
+              {/* MODO 6: CALENDÁRIO */}
+              {modoVisualizacao === 'calendario' && (
+                <div className="p-4 rounded-xl border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232] space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#E3E8EF] dark:border-[#223347]">
+                    <span className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9]">
+                      Agenda de Ações Calendarizadas
+                    </span>
+                    <span className="text-xs text-[#5B6B7C]">Horários e Salas</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {cursosFiltrados.map(curso => (
+                      <div
+                        key={curso.id}
+                        onClick={() => {
+                          onNavigateModule('cursos');
+                          onSelectCourse(curso.id);
+                        }}
+                        className="p-3 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-[#F4F6F9]/60 dark:bg-[#0B111B]/60 space-y-1.5 cursor-pointer hover:border-[var(--fortis-primary)] transition-all"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-[#D99B24] uppercase tracking-wide">
+                            {curso.periodo}
+                          </span>
+                          <span className="text-[10px] text-[#5B6B7C]">{curso.localSala}</span>
+                        </div>
+                        <p className="text-xs font-semibold text-[#1B2A3A] dark:text-[#F1F5F9] line-clamp-1">
+                          {curso.nomeCurso}
+                        </p>
+                        <p className="text-[11px] text-[#5B6B7C] font-mono tabular-nums">
+                          {curso.dataInicio} a {curso.dataFim}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+
+        {/* COLUNA DIREITA (1/3 — 4 colunas): Zona Operacional com Dados Reais e EmptyState */}
+        <div className="lg:col-span-4 space-y-4">
+          
+          {/* Card Operacional 1: Próximas Formações */}
+          <Card padding="sm" className="space-y-3">
+            <div className="flex items-center justify-between px-1 pt-1">
+              <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] flex items-center gap-1.5">
+                <Calendar size={14} className="text-[var(--fortis-primary)]" />
+                <span>Próximas formações</span>
+              </h3>
+              <button
+                onClick={() => onNavigateModule('cursos')}
+                className="text-[11px] text-[var(--fortis-primary)] font-semibold hover:underline flex items-center gap-0.5"
+              >
+                <span>Ver todas</span>
+                <ChevronRight size={11} />
+              </button>
+            </div>
+
+            {proximasFormacoes.length === 0 ? (
+              <EmptyState
+                icon={BookOpen}
+                title="Sem próximas formações"
+                description="Não existem ações com data agendada no período filtrado."
+              />
+            ) : (
+              <div className="space-y-2">
+                {proximasFormacoes.map(curso => (
+                  <div
+                    key={curso.id}
+                    onClick={() => {
+                      onNavigateModule('cursos');
+                      onSelectCourse(curso.id);
+                    }}
+                    className="p-2.5 rounded-lg border border-[#E3E8EF] dark:border-[#223347] hover:bg-[#F4F6F9]/60 dark:hover:bg-[#0B111B]/60 transition-colors cursor-pointer flex items-center justify-between"
+                  >
+                    <div className="space-y-0.5 min-w-0 pr-2">
+                      <p className="text-xs font-semibold text-[#1B2A3A] dark:text-[#F1F5F9] truncate">
+                        {curso.nomeCurso}
+                      </p>
+                      <p className="text-[11px] text-[#5B6B7C] dark:text-[#94A3B8] capitalize">
+                        {curso.dataInicio} · Turno da {curso.periodo}
+                      </p>
                     </div>
-                    <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 line-clamp-1">{curso.nomeCurso}</p>
-                    <p className="text-[11px] text-slate-500">{curso.dataInicio} a {curso.dataFim}</p>
+                    <StatusBadge variant={getBadgeVariant(curso.estadoCurso)}>
+                      {curso.estadoCurso.replace('_', ' ')}
+                    </StatusBadge>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-        </div>
-      </div>
+            )}
+          </Card>
 
-      {/* 6. ATIVIDADE RECENTE E PENDÊNCIAS OPERACIONAIS (Fiel à Maquete image_605a31ae.png) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Próximas Formações */}
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <Calendar size={14} className="text-amber-500" />
-              <span>Próximas formações</span>
-            </h3>
-            <button
-              onClick={() => onNavigateModule('cursos')}
-              className="text-[11px] text-amber-600 dark:text-amber-400 font-medium hover:underline flex items-center gap-0.5"
-            >
-              <span>Ver agenda</span>
-              <ArrowRight size={11} />
-            </button>
-          </div>
-
-          <div className="space-y-2">
-            {cursosFiltrados.slice(0, 3).map(curso => (
-              <div
-                key={curso.id}
-                onClick={() => {
-                  onNavigateModule('cursos');
-                  onSelectCourse(curso.id);
-                }}
-                className="p-2.5 rounded-lg border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors cursor-pointer flex items-center justify-between"
+          {/* Card Operacional 2: Tarefas em atraso e a vencer */}
+          <Card padding="sm" className="space-y-3">
+            <div className="flex items-center justify-between px-1 pt-1">
+              <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] flex items-center gap-1.5">
+                <CheckSquare size={14} className="text-[#D99B24]" />
+                <span>Tarefas e Checklist</span>
+              </h3>
+              <button
+                onClick={() => onNavigateModule('tarefas')}
+                className="text-[11px] text-[var(--fortis-primary)] font-semibold hover:underline flex items-center gap-0.5"
               >
-                <div>
-                  <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">{curso.nomeCurso}</p>
-                  <p className="text-[11px] text-slate-400">Início: {curso.dataInicio} · {curso.periodo}</p>
-                </div>
-                <ChevronRight size={14} className="text-slate-400" />
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Pendências Operacionais */}
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <AlertTriangle size={14} className="text-rose-500" />
-              <span>Pendências operacionais</span>
-            </h3>
-            <button
-              onClick={() => onNavigateModule('tarefas')}
-              className="text-[11px] text-amber-600 dark:text-amber-400 font-medium hover:underline flex items-center gap-0.5"
-            >
-              <span>Ver checklist</span>
-              <ArrowRight size={11} />
-            </button>
-          </div>
-
-          <div className="space-y-2">
-            <div 
-              onClick={() => onNavigateModule('tarefas')}
-              className="p-2.5 rounded-lg border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors cursor-pointer flex items-center justify-between"
-            >
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-rose-500" />
-                <div>
-                  <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">6 Tarefas Pedagógicas</p>
-                  <p className="text-[11px] text-slate-400">Envio de documentação e preparação de salas</p>
-                </div>
-              </div>
-              <span className="text-[11px] font-semibold text-amber-600">Acompanhar</span>
+                <span>Ver checklist</span>
+                <ChevronRight size={11} />
+              </button>
             </div>
 
-            <div 
-              onClick={() => onNavigateModule('cursos')}
-              className="p-2.5 rounded-lg border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors cursor-pointer flex items-center justify-between"
-            >
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-amber-500" />
-                <div>
-                  <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">1 Curso por Encerrar Formalmente</p>
-                  <p className="text-[11px] text-slate-400">Gestão da Qualidade ISO 9001 (Realizado)</p>
-                </div>
+            {tarefasOperacionais.length === 0 ? (
+              <EmptyState
+                icon={CheckCircle2}
+                title="Tudo em dia"
+                description="Não existem tarefas em atraso ou a vencer nos próximos 7 dias."
+              />
+            ) : (
+              <div className="space-y-2">
+                {tarefasOperacionais.slice(0, 4).map(tarefa => {
+                  const isAtrasada = tarefa.grupoTemporal === 'Em Atraso';
+
+                  return (
+                    <div
+                      key={tarefa.id}
+                      className="p-2.5 rounded-lg border border-[#E3E8EF] dark:border-[#223347] bg-white dark:bg-[#152232] flex items-start gap-2.5 transition-colors"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleToggleTask(tarefa.id)}
+                        className="mt-0.5 text-slate-300 hover:text-[var(--fortis-primary)] transition-colors shrink-0"
+                        title="Marcar como concluída"
+                      >
+                        <div className="w-4 h-4 rounded border border-slate-300 dark:border-slate-600 flex items-center justify-center hover:border-[var(--fortis-primary)]" />
+                      </button>
+
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-[#1B2A3A] dark:text-[#F1F5F9] line-clamp-1">
+                          {tarefa.titulo}
+                        </p>
+                        <div className="flex items-center gap-2 mt-0.5 text-[10px]">
+                          <span
+                            className={`font-semibold ${
+                              isAtrasada ? 'text-[#D32F2F]' : 'text-[#D99B24]'
+                            }`}
+                          >
+                            {isAtrasada ? 'Em Atraso' : `Vence em ${tarefa.diasRestantes} dias`}
+                          </span>
+                          <span className="text-[#5B6B7C]">·</span>
+                          <span className="text-[#5B6B7C] truncate">{tarefa.responsavel.nomeCompleto}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <span className="text-[11px] font-semibold text-amber-600">Encerrar</span>
+            )}
+          </Card>
+
+          {/* Card Operacional 3: Alertas de Qualidade */}
+          <Card padding="sm" className="space-y-3">
+            <div className="flex items-center justify-between px-1 pt-1">
+              <h3 className="text-xs font-bold text-[#1B2A3A] dark:text-[#F1F5F9] flex items-center gap-1.5">
+                <AlertTriangle size={14} className="text-[#D32F2F]" />
+                <span>Alertas de qualidade</span>
+              </h3>
+              <button
+                onClick={() => onNavigateModule('qualidade')}
+                className="text-[11px] text-[var(--fortis-primary)] font-semibold hover:underline flex items-center gap-0.5"
+              >
+                <span>Gerir</span>
+                <ChevronRight size={11} />
+              </button>
             </div>
 
-            <div 
-              onClick={() => onNavigateModule('qualidade')}
-              className="p-2.5 rounded-lg border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors cursor-pointer flex items-center justify-between"
-            >
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-blue-500" />
-                <div>
-                  <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">2 Ocorrências em Tratamento</p>
-                  <p className="text-[11px] text-slate-400">Ações corretivas ISO 9001 com prazo</p>
-                </div>
+            {alertasQualidade.length === 0 ? (
+              <EmptyState
+                icon={CheckCircle2}
+                title="Sem desvios ativos"
+                description="Não existem ocorrências de qualidade em aberto na organização."
+              />
+            ) : (
+              <div className="space-y-2">
+                {alertasQualidade.map(alerta => (
+                  <div
+                    key={alerta.id}
+                    onClick={() => onNavigateModule('qualidade')}
+                    className="p-2.5 rounded-lg border border-[#E3E8EF] dark:border-[#223347] hover:bg-[#F4F6F9]/60 dark:hover:bg-[#0B111B]/60 transition-colors cursor-pointer space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="font-mono text-[10px] font-semibold text-[#5B6B7C]">
+                        {alerta.codigo}
+                      </span>
+                      <StatusBadge variant={alerta.tipo === 'nao_conformidade' ? 'danger' : 'warning'}>
+                        {alerta.tipo.replace('_', ' ')}
+                      </StatusBadge>
+                    </div>
+                    <p className="text-xs font-semibold text-[#1B2A3A] dark:text-[#F1F5F9] line-clamp-1">
+                      {alerta.descricaoProblema}
+                    </p>
+                    <p className="text-[10px] text-[#5B6B7C]">
+                      Prazo: {alerta.prazoResolucao}
+                    </p>
+                  </div>
+                ))}
               </div>
-              <span className="text-[11px] font-semibold text-amber-600">Gerir</span>
-            </div>
-          </div>
+            )}
+          </Card>
+
         </div>
       </div>
     </div>

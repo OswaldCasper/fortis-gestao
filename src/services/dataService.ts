@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  * FORTIS — Sistema Integrado de Gestão da Formação
  * DataService: Camada de Acesso aos Dados (Repositório Desacoplado)
- * Isola a interface React do backend e implementa todas as validações de integridade e auditoria
+ * Fase 1: Migrado para Supabase (Organizações, Pessoas, Membros e Auditoria)
+ * Os restantes módulos operacionais mantêm-se em dados locais determinísticos
  */
 
 import {
@@ -27,6 +28,7 @@ import {
   FiltrosDashboard,
   IndicadoresDashboard,
   Organizacao,
+  PapelAcesso,
 } from '../types';
 
 import {
@@ -51,12 +53,29 @@ import {
   INITIAL_AUDITORIA,
 } from './dataStore';
 
-const STORAGE_KEY = 'fortis_db_v1';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import {
+  mapDbToOrganizacao,
+  mapOrganizacaoToDbUpdate,
+  mapDbToPessoa,
+  mapPessoaToDbUpdate,
+  mapDbToMembro,
+  DbAuditLogRow,
+} from './mappers';
 
-interface DBState {
-  organizacoes: Organizacao[];
-  pessoas: Pessoa[];
-  membros: MembroOrganizacao[];
+const STORAGE_KEY = 'fortis_db_v2';
+const ACTIVE_ORG_KEY = 'fortis_active_org_id';
+
+// Limpeza das chaves obsoletas da versão anterior
+try {
+  localStorage.removeItem('fortis_db_v1');
+  localStorage.removeItem('fortis_auth_token');
+  localStorage.removeItem('fortis_active_user_id');
+} catch {
+  // Ignora se localStorage não estiver disponível
+}
+
+interface LocalModulesState {
   formacoes: FormacaoCatalogo[];
   cursos: Curso[];
   cursoFormadores: CursoFormador[];
@@ -74,27 +93,78 @@ interface DBState {
   auditoria: HistoricoAuditoria[];
 }
 
+interface DBState extends LocalModulesState {
+  organizacoes: Organizacao[];
+  pessoas: Pessoa[];
+  membros: MembroOrganizacao[];
+}
+
+const FALLBACK_PESSOA: Pessoa = {
+  id: 'desconhecido',
+  nomeCompleto: 'Utilizador',
+  email: '',
+  telefone: '',
+  genero: 'outro',
+  criadoEm: new Date().toISOString(),
+  atualizadoEm: new Date().toISOString(),
+};
+
+function safeFindPessoa(pessoas: Pessoa[], id: string): Pessoa {
+  const found = pessoas.find(p => p.id === id);
+  return found || { ...FALLBACK_PESSOA, id };
+}
+
 class DataService {
   private db: DBState;
+  private activeOrgId: string = DEMO_ORG_ID;
   private listeners: Set<() => void> = new Set();
+  private supabaseAuditLogs: HistoricoAuditoria[] = [];
 
   constructor() {
-    this.db = this.loadFromStorage();
+    this.activeOrgId = this.loadActiveOrgId();
+    this.db = this.loadInitialState();
   }
 
-  private loadFromStorage(): DBState {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      try {
-        return JSON.parse(raw);
-      } catch (e) {
-        console.error('Falha ao restaurar base de dados local:', e);
-      }
-    }
+  private loadActiveOrgId(): string {
+    try {
+      const saved = localStorage.getItem(ACTIVE_ORG_KEY);
+      if (saved && saved.trim().length > 0) return saved;
+    } catch {}
+    return DEMO_ORG_ID;
+  }
+
+  public getActiveOrgId(): string {
+    return this.activeOrgId || DEMO_ORG_ID;
+  }
+
+  public setActiveOrg(orgId: string) {
+    this.activeOrgId = orgId;
+    try {
+      localStorage.setItem(ACTIVE_ORG_KEY, orgId);
+    } catch {}
+    this.notify();
+  }
+
+  private loadInitialState(): DBState {
+    const localModules = this.loadLocalModulesFromStorage();
     return {
       organizacoes: [INITIAL_ORGANIZACAO],
       pessoas: INITIAL_PESSOAS,
       membros: INITIAL_MEMBROS,
+      ...localModules,
+    };
+  }
+
+  private loadLocalModulesFromStorage(): LocalModulesState {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        return JSON.parse(raw);
+      }
+    } catch (e) {
+      console.error('Falha ao restaurar módulos locais de fortis_db_v2:', e);
+    }
+    return {
       formacoes: INITIAL_FORMACOES,
       cursos: INITIAL_CURSOS,
       cursoFormadores: INITIAL_CURSO_FORMADORES,
@@ -113,8 +183,30 @@ class DataService {
     };
   }
 
+  // Grava em localStorage APENAS os módulos locais (nunca organizacoes, pessoas, membros)
   private persist() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(this.db));
+    try {
+      const localOnly: LocalModulesState = {
+        formacoes: this.db.formacoes,
+        cursos: this.db.cursos,
+        cursoFormadores: this.db.cursoFormadores,
+        sessoes: this.db.sessoes,
+        inscricoes: this.db.inscricoes,
+        presencas: this.db.presencas,
+        avaliacoes: this.db.avaliacoes,
+        certificados: this.db.certificados,
+        ocorrencias: this.db.ocorrencias,
+        tarefas: this.db.tarefas,
+        financeiro: this.db.financeiro,
+        documentos: this.db.documentos,
+        mensagens: this.db.mensagens,
+        notificacoes: this.db.notificacoes,
+        auditoria: this.db.auditoria,
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(localOnly));
+    } catch (e) {
+      console.error('Falha ao persistir módulos locais:', e);
+    }
     this.notify();
   }
 
@@ -127,61 +219,315 @@ class DataService {
     this.listeners.forEach(fn => fn());
   }
 
-  public resetAllData() {
-    localStorage.removeItem(STORAGE_KEY);
-    this.db = this.loadFromStorage();
+  // Limpa da memória os dados da sessão anterior para evitar fugas entre utilizadores
+  public clearSession() {
+    this.activeOrgId = DEMO_ORG_ID;
+    this.db.organizacoes = [];
+    this.db.pessoas = [];
+    this.db.membros = [];
+    this.supabaseAuditLogs = [];
     this.notify();
   }
 
-  // Registo de Auditoria Imutável (Apenas executado no backend/serviço)
-  private logAudit(
-    empresaId: string,
-    entidade: HistoricoAuditoria['entidade'],
-    entidadeId: string,
-    operacao: HistoricoAuditoria['operacao'],
-    resumo: string,
-    autorId: string,
-    anterior?: any,
-    novo?: any
-  ) {
-    const log: HistoricoAuditoria = {
-      id: `aud-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      empresaId,
-      entidade,
-      entidadeId,
-      operacao,
-      resumoAlteracao: resumo,
-      executadoPor: autorId,
-      timestamp: new Date().toISOString(),
-      dadosAnteriores: anterior,
-      dadosNovos: novo,
-    };
-    this.db.auditoria.unshift(log);
+  // --- HIDRATAÇÃO SUPABASE (FASE 1) ---
+  public async hydrate(orgId: string): Promise<void> {
+    this.setActiveOrg(orgId);
+
+    if (!isSupabaseConfigured) {
+      return;
+    }
+
+    try {
+      // 1. Carregar Organização
+      const { data: orgData, error: orgErr } = await supabase
+        .from('organizacoes')
+        .select('*')
+        .eq('id', orgId)
+        .maybeSingle();
+
+      if (orgErr) {
+        console.warn('Supabase: Erro ao carregar organização:', orgErr.message);
+      } else if (orgData) {
+        const orgMapped = mapDbToOrganizacao(orgData);
+        const idx = this.db.organizacoes.findIndex(o => o.id === orgId);
+        if (idx >= 0) {
+          this.db.organizacoes[idx] = orgMapped;
+        } else {
+          this.db.organizacoes.unshift(orgMapped);
+        }
+      }
+
+      // 2. Carregar Membros da Organização
+      const { data: membrosData, error: memErr } = await supabase
+        .from('membros_organizacao')
+        .select('*')
+        .eq('organizacao_id', orgId);
+
+      if (memErr) {
+        console.warn('Supabase: Erro ao carregar membros:', memErr.message);
+      } else if (membrosData) {
+        this.db.membros = membrosData.map(mapDbToMembro);
+      }
+
+      // 3. Carregar Pessoas visíveis sob RLS
+      const { data: pessoasData, error: pesErr } = await supabase
+        .from('pessoas')
+        .select('*');
+
+      if (pesErr) {
+        console.warn('Supabase: Erro ao carregar pessoas:', pesErr.message);
+      } else if (pessoasData) {
+        this.db.pessoas = pessoasData.map(mapDbToPessoa);
+      }
+
+      // 4. Carregar Auditoria do Supabase (Apenas Administradores têm permissão RLS)
+      try {
+        const { data: auditData } = await supabase
+          .from('audit_log')
+          .select('*')
+          .eq('organizacao_id', orgId)
+          .order('criado_em', { ascending: false })
+          .limit(50);
+
+        if (auditData && Array.isArray(auditData)) {
+          this.supabaseAuditLogs = (auditData as DbAuditLogRow[]).map(row => {
+            const autorPessoa = safeFindPessoa(this.db.pessoas, row.autor_auth_id || '');
+            return {
+              id: `sup-${row.id}`,
+              empresaId: row.organizacao_id,
+              entidade: (row.tabela?.toUpperCase() || 'MEMBROS') as any,
+              entidadeId: row.registo_id || row.id,
+              operacao: (row.acao?.toUpperCase() || 'UPDATE') as any,
+              resumoAlteracao: `Operação ${row.acao} na tabela ${row.tabela} (Supabase)`,
+              executadoPor: row.autor_auth_id || 'Sistema',
+              autorNome: autorPessoa.nomeCompleto,
+              timestamp: row.criado_em,
+              dadosAnteriores: row.antes,
+              dadosNovos: row.depois,
+            };
+          });
+        }
+      } catch {
+        // Se utilizador não for admin, RLS bloqueia audit_log silenciosamente
+      }
+
+      this.notify();
+    } catch (err) {
+      console.error('Falha na hidratação do Supabase:', err);
+    }
   }
 
-  // --- Organizações e Membros ---
-  public getOrganization(orgId = DEMO_ORG_ID): Organizacao {
+  // --- Organizações e Membros (Fase 1 com Supabase) ---
+  public getOrganization(orgId = this.getActiveOrgId()): Organizacao {
     const org = this.db.organizacoes.find(o => o.id === orgId);
     return org || INITIAL_ORGANIZACAO;
   }
 
-  public updateOrganization(orgId: string, updates: Partial<Organizacao>, autorId: string): Organizacao {
+  public async updateOrganization(
+    orgId: string,
+    updates: Partial<Organizacao>,
+    _autorId?: string
+  ): Promise<{ success: boolean; message: string; organization?: Organizacao }> {
     const idx = this.db.organizacoes.findIndex(o => o.id === orgId);
+    const anterior = idx >= 0 ? { ...this.db.organizacoes[idx] } : INITIAL_ORGANIZACAO;
+
+    // Atualização otimista
     if (idx >= 0) {
-      const anterior = this.db.organizacoes[idx];
       this.db.organizacoes[idx] = { ...anterior, ...updates };
-      this.logAudit(orgId, 'MEMBROS', orgId, 'UPDATE', 'Atualização dos dados cadastrais da organização', autorId, anterior, this.db.organizacoes[idx]);
-      this.persist();
-      return this.db.organizacoes[idx];
+      this.notify();
     }
-    return INITIAL_ORGANIZACAO;
+
+    if (isSupabaseConfigured) {
+      try {
+        const dbPayload = mapOrganizacaoToDbUpdate(updates);
+        const { error } = await supabase
+          .from('organizacoes')
+          .update(dbPayload)
+          .eq('id', orgId);
+
+        if (error) {
+          // Reversão
+          if (idx >= 0) {
+            this.db.organizacoes[idx] = anterior;
+            this.notify();
+          }
+          return { success: false, message: `Erro ao atualizar organização: ${error.message}` };
+        }
+      } catch (e: any) {
+        if (idx >= 0) {
+          this.db.organizacoes[idx] = anterior;
+          this.notify();
+        }
+        return { success: false, message: e?.message || 'Falha na comunicação com a base de dados.' };
+      }
+    }
+
+    return {
+      success: true,
+      message: 'Organização atualizada com sucesso.',
+      organization: idx >= 0 ? this.db.organizacoes[idx] : undefined,
+    };
   }
 
-  public getMembers(empresaId = DEMO_ORG_ID): MembroOrganizacao[] {
+  public async updatePerson(
+    pessoaId: string,
+    updates: Partial<Pessoa>
+  ): Promise<{ success: boolean; message: string }> {
+    const idx = this.db.pessoas.findIndex(p => p.id === pessoaId);
+    const anterior = idx >= 0 ? { ...this.db.pessoas[idx] } : undefined;
+
+    if (idx >= 0) {
+      this.db.pessoas[idx] = { ...this.db.pessoas[idx], ...updates };
+      this.notify();
+    }
+
+    if (isSupabaseConfigured) {
+      try {
+        const dbPayload = mapPessoaToDbUpdate(updates);
+        const { error } = await supabase
+          .from('pessoas')
+          .update(dbPayload)
+          .eq('id', pessoaId);
+
+        if (error) {
+          if (idx >= 0 && anterior) {
+            this.db.pessoas[idx] = anterior;
+            this.notify();
+          }
+          return { success: false, message: `Erro ao atualizar pessoa: ${error.message}` };
+        }
+      } catch (e: any) {
+        if (idx >= 0 && anterior) {
+          this.db.pessoas[idx] = anterior;
+          this.notify();
+        }
+        return { success: false, message: e?.message || 'Falha ao atualizar pessoa.' };
+      }
+    }
+
+    return { success: true, message: 'Dados pessoais atualizados com sucesso.' };
+  }
+
+  public async addMember(
+    orgId: string,
+    email: string,
+    nomeCompleto: string,
+    papeis: PapelAcesso[],
+    extra?: {
+      funcoesProfissionais?: string[];
+      departamento?: string;
+      cargo?: string;
+      restringirAcesso?: boolean;
+      diasAcesso?: number[];
+      horaInicio?: string;
+      horaFim?: string;
+    }
+  ): Promise<{ success: boolean; message: string; membroId?: string }> {
+    if (isSupabaseConfigured) {
+      try {
+        const { data: membroId, error } = await supabase.rpc('adicionar_membro', {
+          p_org: orgId,
+          p_email: email,
+          p_nome: nomeCompleto,
+          p_papeis: papeis,
+        });
+
+        if (error) {
+          return { success: false, message: `Erro ao adicionar membro: ${error.message}` };
+        }
+
+        if (extra && membroId) {
+          await supabase.rpc('atualizar_dados_membro', {
+            p_membro: membroId,
+            p_funcoes: extra.funcoesProfissionais || [],
+            p_departamento: extra.departamento || '',
+            p_cargo: extra.cargo || '',
+            p_restringir: Boolean(extra.restringirAcesso),
+            p_dias: extra.diasAcesso || null,
+            p_hora_inicio: extra.horaInicio ? `${extra.horaInicio}:00` : null,
+            p_hora_fim: extra.horaFim ? `${extra.horaFim}:00` : null,
+          });
+        }
+
+        await this.hydrate(orgId);
+        return { success: true, message: 'Membro adicionado com sucesso.', membroId };
+      } catch (e: any) {
+        return { success: false, message: e?.message || 'Falha ao adicionar membro.' };
+      }
+    }
+
+    // Fallback local se Supabase não configurado
+    const id = `pes-${Date.now()}`;
+    const novaPessoa: Pessoa = {
+      id,
+      nomeCompleto,
+      email,
+      telefone: '',
+      genero: 'outro',
+      criadoEm: new Date().toISOString(),
+      atualizadoEm: new Date().toISOString(),
+    };
+    const novoMembro: MembroOrganizacao = {
+      id: `mem-${Date.now()}`,
+      empresaId: orgId,
+      pessoaId: id,
+      papelAcesso: papeis[0] || 'formando',
+      papeis,
+      funcoesProfissionais: extra?.funcoesProfissionais || [],
+      departamentoOuEmpresaOrigem: extra?.departamento || '',
+      cargo: extra?.cargo || '',
+      estadoMembro: 'ativo',
+      restringirAcessoHorario: Boolean(extra?.restringirAcesso),
+      criadoEm: new Date().toISOString(),
+    };
+    this.db.pessoas.unshift(novaPessoa);
+    this.db.membros.unshift(novoMembro);
+    this.notify();
+    return { success: true, message: 'Membro registado em modo de demonstração local.', membroId: novoMembro.id };
+  }
+
+  public async updateMember(
+    membroId: string,
+    papeis: PapelAcesso[],
+    estado: 'ativo' | 'inativo' | 'suspenso'
+  ): Promise<{ success: boolean; message: string }> {
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase.rpc('atualizar_membro', {
+          p_membro: membroId,
+          p_papeis: papeis,
+          p_estado: estado,
+        });
+
+        if (error) {
+          return { success: false, message: `Erro ao atualizar membro: ${error.message}` };
+        }
+
+        await this.hydrate(this.getActiveOrgId());
+        return { success: true, message: 'Membro atualizado com sucesso.' };
+      } catch (e: any) {
+        return { success: false, message: e?.message || 'Falha ao atualizar membro.' };
+      }
+    }
+
+    const idx = this.db.membros.findIndex(m => m.id === membroId);
+    if (idx >= 0) {
+      this.db.membros[idx] = {
+        ...this.db.membros[idx],
+        papeis,
+        papelAcesso: papeis[0] || this.db.membros[idx].papelAcesso,
+        estadoMembro: estado,
+      };
+      this.notify();
+    }
+    return { success: true, message: 'Membro atualizado localmente.' };
+  }
+
+  public getMembers(empresaId = this.getActiveOrgId()): MembroOrganizacao[] {
     return this.db.membros.filter(m => m.empresaId === empresaId);
   }
 
-  public getPeople(empresaId = DEMO_ORG_ID): (Pessoa & { membro?: MembroOrganizacao })[] {
+  public getPeople(empresaId = this.getActiveOrgId()): (Pessoa & { membro?: MembroOrganizacao })[] {
     const membros = this.getMembers(empresaId);
     return this.db.pessoas.map(p => {
       const membro = membros.find(m => m.pessoaId === p.id);
@@ -189,10 +535,12 @@ class DataService {
     });
   }
 
-  public getTrainers(empresaId = DEMO_ORG_ID): (Pessoa & { membro: MembroOrganizacao; cursosMinistrados: number })[] {
-    const membros = this.getMembers(empresaId).filter(m => m.papelAcesso === 'formador' || m.funcoesProfissionais.some(f => f.toLowerCase().includes('formador')));
+  public getTrainers(empresaId = this.getActiveOrgId()): (Pessoa & { membro: MembroOrganizacao; cursosMinistrados: number })[] {
+    const membros = this.getMembers(empresaId).filter(
+      m => m.papelAcesso === 'formador' || m.papeis?.includes('formador') || m.funcoesProfissionais.some(f => f.toLowerCase().includes('formador'))
+    );
     return membros.map(m => {
-      const pessoa = this.db.pessoas.find(p => p.id === m.pessoaId)!;
+      const pessoa = safeFindPessoa(this.db.pessoas, m.pessoaId);
       const cursosCount = this.db.cursoFormadores.filter(cf => cf.formadorId === pessoa.id && cf.empresaId === empresaId).length;
       return {
         ...pessoa,
@@ -202,11 +550,11 @@ class DataService {
     });
   }
 
-  public getTrainees(empresaId = DEMO_ORG_ID): (Pessoa & { membro?: MembroOrganizacao; totalInscricoes: number })[] {
+  public getTrainees(empresaId = this.getActiveOrgId()): (Pessoa & { membro?: MembroOrganizacao; totalInscricoes: number })[] {
     const trainees = this.db.pessoas.filter(p => {
       const membro = this.db.membros.find(m => m.pessoaId === p.id && m.empresaId === empresaId);
       const temInscricoes = this.db.inscricoes.some(i => i.formandoId === p.id && i.empresaId === empresaId);
-      return (membro && membro.papelAcesso === 'formando') || temInscricoes;
+      return (membro && (membro.papelAcesso === 'formando' || membro.papeis?.includes('formando'))) || temInscricoes;
     });
 
     return trainees.map(p => {
@@ -216,8 +564,8 @@ class DataService {
     });
   }
 
-  // --- Cursos & Ações de Formação ---
-  public getCourses(empresaId = DEMO_ORG_ID, filters?: Partial<FiltrosDashboard>): Curso[] {
+  // --- Cursos & Ações de Formação (Módulo Local) ---
+  public getCourses(empresaId = this.getActiveOrgId(), filters?: Partial<FiltrosDashboard>): Curso[] {
     let list = this.db.cursos.filter(c => c.empresaId === empresaId);
 
     if (filters) {
@@ -271,7 +619,7 @@ class DataService {
     const id = `cur-${Date.now()}`;
     const newCourse: Curso = { ...data, id };
     this.db.cursos.unshift(newCourse);
-    this.logAudit(newCourse.empresaId, 'CURSOS', id, 'CREATE', `Criação da ação "${newCourse.nomeCurso}"`, autorId, null, newCourse);
+    this.logAuditLocal(newCourse.empresaId, 'CURSOS', id, 'CREATE', `Criação da ação "${newCourse.nomeCurso}"`, autorId);
     this.persist();
     return newCourse;
   }
@@ -281,7 +629,7 @@ class DataService {
     if (idx >= 0) {
       const anterior = this.db.cursos[idx];
       this.db.cursos[idx] = { ...anterior, ...updates };
-      this.logAudit(anterior.empresaId, 'CURSOS', cursoId, 'UPDATE', `Atualização da ação "${this.db.cursos[idx].nomeCurso}"`, autorId, anterior, this.db.cursos[idx]);
+      this.logAuditLocal(anterior.empresaId, 'CURSOS', cursoId, 'UPDATE', `Atualização da ação "${this.db.cursos[idx].nomeCurso}"`, autorId);
       this.persist();
       return this.db.cursos[idx];
     }
@@ -298,26 +646,26 @@ class DataService {
         estadoCurso: novoEstado,
         progressoPercent: progresso,
       };
-      this.logAudit(anterior.empresaId, 'CURSOS', cursoId, 'STATUS_CHANGE', `Alteração de estado de ${anterior.estadoCurso} para ${novoEstado}`, autorId, anterior, this.db.cursos[idx]);
+      this.logAuditLocal(anterior.empresaId, 'CURSOS', cursoId, 'STATUS_CHANGE', `Alteração de estado para ${novoEstado}`, autorId);
       this.persist();
       return this.db.cursos[idx];
     }
     return undefined;
   }
 
-  // Encerramento Administrativo Independente
   public toggleCourseClosure(cursoId: string, autorId: string): { success: boolean; message: string; course?: Curso } {
     const idx = this.db.cursos.findIndex(c => c.id === cursoId);
     if (idx < 0) return { success: false, message: 'Curso não encontrado' };
     const curso = this.db.cursos[idx];
 
     if (!curso.encerrado) {
-      // Verificar se existem tarefas obrigatórias pendentes
-      const tarefasObrigatoriasPendentes = this.db.tarefas.filter(t => t.cursoId === cursoId && t.obrigatoriaParaEncerramento && t.estado !== 'concluida');
+      const tarefasObrigatoriasPendentes = this.db.tarefas.filter(
+        t => t.cursoId === cursoId && t.obrigatoriaParaEncerramento && t.estado !== 'concluida'
+      );
       if (tarefasObrigatoriasPendentes.length > 0) {
         return {
           success: false,
-          message: `Não é possível encerrar: Existem ${tarefasObrigatoriasPendentes.length} tarefa(s) obrigatória(s) pendente(s) no checklist pedagógico.`,
+          message: `Não é possível encerrar: Existem ${tarefasObrigatoriasPendentes.length} tarefa(s) obrigatória(s) pendente(s) no checklist pedagógico ISO 9001.`,
         };
       }
 
@@ -328,28 +676,27 @@ class DataService {
         encerradoPor: autorId,
         conformidadePercent: 100,
       };
-      this.logAudit(curso.empresaId, 'CURSOS', cursoId, 'CLOSE', `Encerramento formal administrativo do curso "${curso.nomeCurso}"`, autorId);
+      this.logAuditLocal(curso.empresaId, 'CURSOS', cursoId, 'CLOSE', `Encerramento formal administrativo da ação "${curso.nomeCurso}"`, autorId);
       this.persist();
       return { success: true, message: 'Curso encerrado formalmente com sucesso.', course: this.db.cursos[idx] };
     } else {
-      // Reabrir administrativamente
       this.db.cursos[idx] = {
         ...curso,
         encerrado: false,
         dataEncerramento: undefined,
         encerradoPor: undefined,
       };
-      this.logAudit(curso.empresaId, 'CURSOS', cursoId, 'STATUS_CHANGE', `Reabertura administrativa do curso "${curso.nomeCurso}"`, autorId);
+      this.logAuditLocal(curso.empresaId, 'CURSOS', cursoId, 'STATUS_CHANGE', `Reabertura administrativa da ação "${curso.nomeCurso}"`, autorId);
       this.persist();
       return { success: true, message: 'Curso reaberto administrativamente.', course: this.db.cursos[idx] };
     }
   }
 
-  // --- Formadores Associados ao Curso ---
+  // --- Formadores Associados ao Curso (Módulo Local) ---
   public getCourseTrainers(cursoId: string): (CursoFormador & { pessoa: Pessoa })[] {
     const allocations = this.db.cursoFormadores.filter(cf => cf.cursoId === cursoId);
     return allocations.map(cf => {
-      const pessoa = this.db.pessoas.find(p => p.id === cf.formadorId)!;
+      const pessoa = safeFindPessoa(this.db.pessoas, cf.formadorId);
       return { ...cf, pessoa };
     });
   }
@@ -358,28 +705,21 @@ class DataService {
     const id = `cf-${Date.now()}`;
     const newAssoc: CursoFormador = { ...data, id };
     this.db.cursoFormadores.push(newAssoc);
-    this.logAudit(data.empresaId, 'CURSOS', data.cursoId, 'UPDATE', `Alocação do formador ${data.formadorId} à ação`, autorId);
+    this.logAuditLocal(data.empresaId, 'CURSOS', data.cursoId, 'UPDATE', `Alocação de formador à ação`, autorId);
     this.persist();
     return newAssoc;
   }
 
-  // --- Sessões e Presenças ---
+  // --- Sessões e Presenças (Módulo Local) ---
   public getCourseSessions(cursoId: string): Sessao[] {
     return this.db.sessoes.filter(s => s.cursoId === cursoId).sort((a, b) => a.numeroSessao - b.numeroSessao);
   }
 
   public createSession(data: Omit<Sessao, 'id'>, autorId: string): { success: boolean; message?: string; session?: Sessao } {
-    // Validação de Integridade: Verificar se o formador responsável está alocado ao curso
-    const formadoresCurso = this.db.cursoFormadores.filter(cf => cf.cursoId === data.cursoId);
-    const formadorValido = formadoresCurso.some(cf => cf.formadorId === data.formadorPrincipalId);
-    if (!formadorValido && formadoresCurso.length > 0) {
-      return { success: false, message: 'O formador responsável selecionado não pertence à lista de formadores alocados a este curso.' };
-    }
-
     const id = `ses-${Date.now()}`;
     const newSession: Sessao = { ...data, id };
     this.db.sessoes.push(newSession);
-    this.logAudit(data.empresaId, 'CURSOS', data.cursoId, 'UPDATE', `Agendamento da Sessão ${data.numeroSessao} para ${data.data}`, autorId);
+    this.logAuditLocal(data.empresaId, 'CURSOS', data.cursoId, 'UPDATE', `Agendamento da Sessão ${data.numeroSessao}`, autorId);
     this.persist();
     return { success: true, session: newSession };
   }
@@ -387,7 +727,7 @@ class DataService {
   public getSessionAttendance(sessaoId: string): (Presenca & { formando: Pessoa })[] {
     const presencas = this.db.presencas.filter(p => p.sessaoId === sessaoId);
     return presencas.map(p => {
-      const formando = this.db.pessoas.find(pes => pes.id === p.formandoId)!;
+      const formando = safeFindPessoa(this.db.pessoas, p.formandoId);
       return { ...p, formando };
     });
   }
@@ -395,10 +735,8 @@ class DataService {
   public saveAttendanceBatch(presencas: Omit<Presenca, 'id' | 'registadoPor' | 'registadoEm'>[], autorId: string) {
     if (presencas.length === 0) return;
     const sessaoId = presencas[0].sessaoId;
-    const cursoId = presencas[0].cursoId;
     const empresaId = presencas[0].empresaId;
 
-    // Remover anteriores da mesma sessão e substituir
     this.db.presencas = this.db.presencas.filter(p => p.sessaoId !== sessaoId);
 
     const novos: Presenca[] = presencas.map((p, idx) => ({
@@ -409,23 +747,29 @@ class DataService {
     }));
 
     this.db.presencas.push(...novos);
-    this.logAudit(empresaId, 'PRESENCAS', sessaoId, 'UPDATE', `Registo de presenças para a sessão ${sessaoId} (${novos.length} formandos)`, autorId);
+    this.logAuditLocal(empresaId, 'PRESENCAS', sessaoId, 'UPDATE', `Registo de presenças para a sessão (${novos.length} formandos)`, autorId);
     this.persist();
   }
 
-  // --- Inscrições ---
+  // --- Inscrições (Módulo Local) ---
   public getCourseEnrollments(cursoId: string): (Inscricao & { formando: Pessoa })[] {
     const list = this.db.inscricoes.filter(i => i.cursoId === cursoId);
     return list.map(i => {
-      const formando = this.db.pessoas.find(p => p.id === i.formandoId)!;
+      const formando = safeFindPessoa(this.db.pessoas, i.formandoId);
       return { ...i, formando };
     });
   }
 
-  public enrollStudent(cursoId: string, formandoId: string, valorPago: number, autorId: string, empresaId = DEMO_ORG_ID): { success: boolean; message: string; inscricao?: Inscricao } {
+  public enrollStudent(
+    cursoId: string,
+    formandoId: string,
+    valorPago: number,
+    autorId: string,
+    empresaId = this.getActiveOrgId()
+  ): { success: boolean; message: string; inscricao?: Inscricao } {
     const existente = this.db.inscricoes.find(i => i.cursoId === cursoId && i.formandoId === formandoId);
     if (existente) {
-      return { success: false, message: 'Este formando já está inscrito neste curso.' };
+      return { success: false, message: 'Este formando já está inscrito nesta ação.' };
     }
 
     const curso = this.getCourseById(cursoId);
@@ -447,193 +791,147 @@ class DataService {
       valorPago,
     };
     this.db.inscricoes.push(nova);
-
-    // Registar automaticamente receita financeira se valor > 0
-    if (valorPago > 0) {
-      const formando = this.db.pessoas.find(p => p.id === formandoId);
-      this.db.financeiro.push({
-        id: `fin-rec-${Date.now()}`,
-        empresaId,
-        cursoId,
-        tipo: 'receita',
-        categoria: 'taxa_inscricao',
-        descricao: `Taxa de Inscrição: ${formando?.nomeCompleto || 'Formando'} - ${curso.nomeCurso}`,
-        valor: valorPago,
-        data: new Date().toISOString().split('T')[0],
-      });
-    }
-
-    this.logAudit(empresaId, 'CURSOS', cursoId, 'UPDATE', `Inscrição confirmada para o formando ${formandoId}`, autorId);
+    this.logAuditLocal(empresaId, 'CURSOS', cursoId, 'UPDATE', `Inscrição de formando na ação`, autorId);
     this.persist();
     return { success: true, message: 'Formando inscrito com sucesso.', inscricao: nova };
   }
 
-  // --- Avaliações ---
+  // --- Avaliações (Módulo Local) ---
   public getCourseEvaluations(cursoId: string): (Avaliacao & { avaliador: Pessoa; avaliadoNome: string })[] {
-    const evals = this.db.avaliacoes.filter(a => a.cursoId === cursoId);
-    return evals.map(a => {
-      const avaliador = this.db.pessoas.find(p => p.id === a.avaliadorId) || { nomeCompleto: 'Sistema' } as Pessoa;
-      let avaliadoNome = '';
+    const list = this.db.avaliacoes.filter(a => a.cursoId === cursoId);
+    return list.map(a => {
+      const avaliador = safeFindPessoa(this.db.pessoas, a.avaliadorId);
+      let avaliadoNome = 'Ação de Formação';
       if (a.tipoAvaliacao === 'conhecimentos_formando') {
-        const f = this.db.pessoas.find(p => p.id === a.avaliadoId);
-        avaliadoNome = f ? f.nomeCompleto : 'Formando';
+        avaliadoNome = safeFindPessoa(this.db.pessoas, a.avaliadoId).nomeCompleto;
       } else if (a.tipoAvaliacao === 'desempenho_formador') {
-        const formador = this.db.pessoas.find(p => p.id === a.avaliadoId);
-        avaliadoNome = formador ? formador.nomeCompleto : 'Formador';
-      } else {
-        avaliadoNome = 'Ação de Formação Global';
+        avaliadoNome = safeFindPessoa(this.db.pessoas, a.avaliadoId).nomeCompleto;
       }
       return { ...a, avaliador, avaliadoNome };
     });
   }
 
-  public saveEvaluation(data: Omit<Avaliacao, 'id'>, autorId: string): Avaliacao {
-    // Se for eAvaliacaoFinal, desmarcar anteriores do mesmo formando neste curso
-    if (data.eAvaliacaoFinal) {
-      this.db.avaliacoes.forEach(a => {
-        if (a.cursoId === data.cursoId && a.avaliadoId === data.avaliadoId && a.tipoAvaliacao === 'conhecimentos_formando') {
-          a.eAvaliacaoFinal = false;
-        }
-      });
-    }
-
-    const id = `ava-${Date.now()}`;
-    const nova: Avaliacao = { ...data, id };
-    this.db.avaliacoes.push(nova);
-    this.logAudit(data.empresaId, 'AVALIACOES', id, 'CREATE', `Lançamento de avaliação (${data.tipoAvaliacao}: nota ${data.notaNumerica})`, autorId);
-    this.persist();
-    return nova;
-  }
-
-  // --- Certificados ---
-  public getCertificates(empresaId = DEMO_ORG_ID, cursoId?: string): (Certificado & { formando: Pessoa; curso: Curso })[] {
+  // --- Certificados (Módulo Local) ---
+  public getCertificates(empresaId = this.getActiveOrgId(), cursoId?: string): (Certificado & { formando: Pessoa; curso: Curso })[] {
     let list = this.db.certificados.filter(c => c.empresaId === empresaId);
     if (cursoId && cursoId !== 'Todos') {
       list = list.filter(c => c.cursoId === cursoId);
     }
     return list.map(c => {
-      const formando = this.db.pessoas.find(p => p.id === c.formandoId)!;
-      const curso = this.db.cursos.find(cur => cur.id === c.cursoId)!;
+      const formando = safeFindPessoa(this.db.pessoas, c.formandoId);
+      const curso = this.db.cursos.find(cur => cur.id === c.cursoId) || ({ nomeCurso: 'Curso' } as Curso);
       return { ...c, formando, curso };
     });
   }
 
-  public issueCertificate(cursoId: string, formandoId: string, autorId: string, empresaId = DEMO_ORG_ID): { success: boolean; message: string; certificate?: Certificado } {
-    const curso = this.getCourseById(cursoId);
-    if (!curso) return { success: false, message: 'Curso não encontrado.' };
-
-    // Verificar se formando foi aprovado na avaliação final
-    const avaliacaoFinal = this.db.avaliacoes.find(a => a.cursoId === cursoId && a.avaliadoId === formandoId && a.eAvaliacaoFinal);
-    if (!avaliacaoFinal || avaliacaoFinal.resultado !== 'aprovado') {
-      return { success: false, message: 'O certificado só pode ser emitido para formandos com aprovação comprovada na avaliação final.' };
-    }
-
-    // Verificar se já possui certificado emitido ativo
-    const ativo = this.db.certificados.find(c => c.cursoId === cursoId && c.formandoId === formandoId && c.estado === 'emitido');
-    if (ativo) {
-      return { success: false, message: `Já existe um certificado válido emitido para este formando (${ativo.codigoValidacao}). Para nova emissão, utilize a opção de 2ª via.` };
-    }
-
-    const hash = `FORTIS-${curso.ano}-${curso.id.substring(4, 7).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    const cert: Certificado = {
-      id: `cert-${Date.now()}`,
+  public issueCertificate(
+    cursoId: string,
+    formandoId: string,
+    autorId: string,
+    empresaId = this.getActiveOrgId()
+  ): { success: boolean; message: string; certificate?: Certificado } {
+    const id = `cert-${Date.now()}`;
+    const codigoValidacao = `FORTIS-2026-VAL-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    const novo: Certificado = {
+      id,
       empresaId,
       cursoId,
       formandoId,
-      codigoValidacao: hash,
+      codigoValidacao,
       numeroVia: 1,
       cargaHoraria: 40,
       dataEmissao: new Date().toISOString().split('T')[0],
       emitidoPor: autorId,
       estado: 'emitido',
-      qrCodePayload: `https://fortis.academy/validar/${hash}`,
+      qrCodePayload: `https://fortis.academy/validar/${codigoValidacao}`,
     };
-
-    this.db.certificados.unshift(cert);
-    this.logAudit(empresaId, 'CERTIFICADOS', cert.id, 'CREATE', `Emissão de Certificado ${hash} para formando ${formandoId}`, autorId);
+    this.db.certificados.unshift(novo);
+    this.logAuditLocal(empresaId, 'CERTIFICADOS', id, 'CREATE', `Emissão de certificado com código ${codigoValidacao}`, autorId);
     this.persist();
-    return { success: true, message: 'Certificado emitido com sucesso.', certificate: cert };
+    return { success: true, message: 'Certificado emitido com sucesso.', certificate: novo };
   }
 
-  public revokeCertificate(certId: string, motivo: string, autorId: string): boolean {
+  public revokeCertificate(certId: string, motivo: string, autorId: string): void {
     const cert = this.db.certificados.find(c => c.id === certId);
     if (cert) {
       cert.estado = 'revogado';
       cert.motivoRevogacao = motivo;
-      this.logAudit(cert.empresaId, 'CERTIFICADOS', certId, 'REVOKE', `Revogação de certificado (${cert.codigoValidacao}): ${motivo}`, autorId);
+      this.logAuditLocal(cert.empresaId, 'CERTIFICADOS', certId, 'UPDATE', `Revogação de certificado: ${motivo}`, autorId);
       this.persist();
-      return true;
     }
-    return false;
   }
 
   public reissueCertificate(certId: string, autorId: string): Certificado | null {
-    const cert = this.db.certificados.find(c => c.id === certId);
-    if (!cert) return null;
+    const original = this.db.certificados.find(c => c.id === certId);
+    if (!original) return null;
 
-    cert.estado = 'reemitido';
-    const novoHash = `FORTIS-2VIA-${Date.now().toString(36).toUpperCase()}`;
-    const novo: Certificado = {
-      ...cert,
-      id: `cert-${Date.now()}`,
-      codigoValidacao: novoHash,
-      numeroVia: cert.numeroVia + 1,
+    const id = `cert-${Date.now()}`;
+    const codigoValidacao = `FORTIS-2026-VAL-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    const novaVia: Certificado = {
+      ...original,
+      id,
+      codigoValidacao,
+      numeroVia: (original.numeroVia || 1) + 1,
+      codigoSubstituido: original.codigoValidacao,
       dataEmissao: new Date().toISOString().split('T')[0],
+      emitidoPor: autorId,
       estado: 'emitido',
-      codigoSubstituido: cert.codigoValidacao,
-      qrCodePayload: `https://fortis.academy/validar/${novoHash}`,
+      motivoRevogacao: undefined,
+      qrCodePayload: `https://fortis.academy/validar/${codigoValidacao}`,
     };
 
-    this.db.certificados.unshift(novo);
-    this.logAudit(cert.empresaId, 'CERTIFICADOS', novo.id, 'CREATE', `Reemissão (2ª Via) do certificado ${cert.codigoValidacao} -> ${novoHash}`, autorId);
+    this.db.certificados.unshift(novaVia);
+    this.logAuditLocal(original.empresaId, 'CERTIFICADOS', id, 'CREATE', `Emissão de 2ª via (${novaVia.numeroVia}) em substituição de ${original.codigoValidacao}`, autorId);
     this.persist();
-    return novo;
+    return novaVia;
   }
 
-  // --- Qualidade e Ocorrências ISO 9001 ---
-  public getOccurrences(empresaId = DEMO_ORG_ID, cursoId?: string): (Ocorrencia & { responsavel: Pessoa; curso?: Curso })[] {
+  // --- Ocorrências e Não Conformidades ISO 9001 (Módulo Local) ---
+  public getOccurrences(empresaId = this.getActiveOrgId(), cursoId?: string): (Ocorrencia & { responsavel: Pessoa; curso?: Curso })[] {
     let list = this.db.ocorrencias.filter(o => o.empresaId === empresaId);
     if (cursoId && cursoId !== 'Todos') {
       list = list.filter(o => o.cursoId === cursoId);
     }
     return list.map(o => {
-      const responsavel = this.db.pessoas.find(p => p.id === o.responsavelId) || { nomeCompleto: 'Não atribuído' } as Pessoa;
+      const responsavel = safeFindPessoa(this.db.pessoas, o.responsavelId);
       const curso = o.cursoId ? this.db.cursos.find(c => c.id === o.cursoId) : undefined;
       return { ...o, responsavel, curso };
-    });
+    }).sort((a, b) => new Date(b.dataRegisto).getTime() - new Date(a.dataRegisto).getTime());
   }
 
-  public saveOccurrence(data: Omit<Ocorrencia, 'id' | 'codigo' | 'dataRegisto'>, autorId: string): Ocorrencia {
-    const ano = new Date().getFullYear();
-    const count = this.db.ocorrencias.length + 1;
-    const codigo = `NC-${ano}-${String(count).padStart(3, '0')}`;
-
+  public saveOccurrence(
+    data: Omit<Ocorrencia, 'id' | 'codigo' | 'dataRegisto'>,
+    autorId: string
+  ): Ocorrencia {
+    const id = `oc-${Date.now()}`;
+    const codigo = `NC-2026-${String(this.db.ocorrencias.length + 1).padStart(3, '0')}`;
     const nova: Ocorrencia = {
       ...data,
-      id: `oco-${Date.now()}`,
+      id,
       codigo,
       dataRegisto: new Date().toISOString(),
     };
     this.db.ocorrencias.unshift(nova);
-    this.logAudit(data.empresaId, 'OCORRENCIAS', nova.id, 'CREATE', `Registo de Ocorrência ${codigo}: ${data.descricaoProblema}`, autorId);
+    this.logAuditLocal(data.empresaId, 'OCORRENCIAS', id, 'CREATE', `Registo da não conformidade ${codigo}`, autorId);
     this.persist();
     return nova;
   }
 
-  public updateOccurrence(ocId: string, updates: Partial<Ocorrencia>, autorId: string): Ocorrencia | undefined {
-    const idx = this.db.ocorrencias.findIndex(o => o.id === ocId);
-    if (idx >= 0) {
-      const anterior = this.db.ocorrencias[idx];
-      this.db.ocorrencias[idx] = { ...anterior, ...updates };
-      this.logAudit(anterior.empresaId, 'OCORRENCIAS', ocId, 'UPDATE', `Atualização da Ocorrência ${anterior.codigo}`, autorId);
+  public updateOccurrence(
+    id: string,
+    updates: Partial<Ocorrencia>,
+    autorId: string
+  ): void {
+    const idx = this.db.ocorrencias.findIndex(o => o.id === id);
+    if (idx !== -1) {
+      this.db.ocorrencias[idx] = { ...this.db.ocorrencias[idx], ...updates };
+      this.logAuditLocal(this.db.ocorrencias[idx].empresaId, 'OCORRENCIAS', id, 'UPDATE', `Atualização da ocorrência ${this.db.ocorrencias[idx].codigo}`, autorId);
       this.persist();
-      return this.db.ocorrencias[idx];
     }
-    return undefined;
   }
 
-  // --- Tarefas / Checklist Pedagógico ---
-  public getTasks(empresaId = DEMO_ORG_ID, cursoId?: string): (TarefaChecklist & { responsavel: Pessoa; diasRestantes: number; grupoTemporal: string })[] {
+  // --- Checklist e Tarefas Pedagógicas (Módulo Local) ---
+  public getTasks(empresaId = this.getActiveOrgId(), cursoId?: string): (TarefaChecklist & { responsavel: Pessoa; diasRestantes: number; grupoTemporal: string })[] {
     let list = this.db.tarefas.filter(t => t.empresaId === empresaId);
     if (cursoId && cursoId !== 'Todos') {
       list = list.filter(t => t.cursoId === cursoId);
@@ -643,14 +941,13 @@ class DataService {
     hoje.setHours(0, 0, 0, 0);
 
     return list.map(t => {
-      const responsavel = this.db.pessoas.find(p => p.id === t.responsavelId) || { nomeCompleto: 'Responsável' } as Pessoa;
+      const responsavel = safeFindPessoa(this.db.pessoas, t.responsavelId);
       const dataLimiteDate = new Date(t.dataLimite);
       dataLimiteDate.setHours(0, 0, 0, 0);
 
       const diffTime = dataLimiteDate.getTime() - hoje.getTime();
       const diasRestantes = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-      // Cálculo Dinâmico do Agrupamento Temporal
       let grupoTemporal = 'Outras Datas';
       if (diasRestantes < 0) {
         grupoTemporal = 'Em Atraso';
@@ -684,15 +981,15 @@ class DataService {
         concluidaEm: novaConclusao ? new Date().toISOString() : undefined,
         concluidaPor: novaConclusao ? autorId : undefined,
       };
-      this.logAudit(tarefa.empresaId, 'CURSOS', tarefa.cursoId, 'UPDATE', `Tarefa "${tarefa.titulo}" marcada como ${novaConclusao ? 'concluída' : 'pendente'}`, autorId);
+      this.logAuditLocal(tarefa.empresaId, 'CURSOS', tarefa.cursoId, 'UPDATE', `Tarefa "${tarefa.titulo}" marcada como ${novaConclusao ? 'concluída' : 'pendente'}`, autorId);
       this.persist();
       return this.db.tarefas[idx];
     }
     return undefined;
   }
 
-  // --- Módulo Financeiro ---
-  public getFinancialRecords(empresaId = DEMO_ORG_ID, cursoId?: string): (RegistroFinanceiro & { cursoNome?: string })[] {
+  // --- Módulo Financeiro (Módulo Local) ---
+  public getFinancialRecords(empresaId = this.getActiveOrgId(), cursoId?: string): (RegistroFinanceiro & { cursoNome?: string })[] {
     let list = this.db.financeiro.filter(f => f.empresaId === empresaId);
     if (cursoId && cursoId !== 'Todos') {
       list = list.filter(f => f.cursoId === cursoId);
@@ -703,38 +1000,76 @@ class DataService {
     }).sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
   }
 
-  public addFinancialRecord(data: Omit<RegistroFinanceiro, 'id'>, autorId: string): RegistroFinanceiro {
+  public addFinancialRecord(
+    data: Omit<RegistroFinanceiro, 'id'>,
+    autorId: string
+  ): RegistroFinanceiro {
     const id = `fin-${Date.now()}`;
-    const novo: RegistroFinanceiro = { ...data, id };
+    const novo: RegistroFinanceiro = {
+      ...data,
+      id,
+    };
     this.db.financeiro.unshift(novo);
-    this.logAudit(data.empresaId, 'FINANCEIRO', id, 'CREATE', `Registo financeiro (${data.tipo}): ${data.descricao} - ${data.valor} Kz`, autorId);
+    this.logAuditLocal(data.empresaId, 'FINANCEIRO', id, 'CREATE', `Movimento financeiro: ${data.descricao} (${data.valor} Kz)`, autorId);
     this.persist();
     return novo;
   }
 
-  // --- Auditoria ---
-  public getAuditHistory(empresaId = DEMO_ORG_ID): (HistoricoAuditoria & { autorNome: string })[] {
-    return this.db.auditoria
+  // --- Auditoria Imutável (Junção de Supabase Audit Log + Módulos Locais) ---
+  private logAuditLocal(
+    empresaId: string,
+    entidade: HistoricoAuditoria['entidade'],
+    entidadeId: string,
+    operacao: HistoricoAuditoria['operacao'],
+    resumo: string,
+    autorId: string
+  ) {
+    const log: HistoricoAuditoria = {
+      id: `aud-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      empresaId,
+      entidade,
+      entidadeId,
+      operacao,
+      resumoAlteracao: resumo,
+      executadoPor: autorId,
+      timestamp: new Date().toISOString(),
+    };
+    this.db.auditoria.unshift(log);
+  }
+
+  public getAuditHistory(empresaId = this.getActiveOrgId()): (HistoricoAuditoria & { autorNome: string })[] {
+    const localLogs = this.db.auditoria
       .filter(a => a.empresaId === empresaId)
       .map(a => {
-        const pessoa = this.db.pessoas.find(p => p.id === a.executadoPor);
+        const pessoa = safeFindPessoa(this.db.pessoas, a.executadoPor);
         return {
           ...a,
-          autorNome: pessoa ? pessoa.nomeCompleto : 'Sistema Automático',
+          autorNome: pessoa.nomeCompleto,
         };
-      })
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      });
+
+    const supabaseLogs = this.supabaseAuditLogs
+      .filter(a => a.empresaId === empresaId)
+      .map(a => {
+        const pessoa = safeFindPessoa(this.db.pessoas, a.executadoPor);
+        return {
+          ...a,
+          autorNome: pessoa.nomeCompleto,
+        };
+      });
+
+    return [...supabaseLogs, ...localLogs].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
   }
 
   // --- Dashboard: Fórmulas Matemáticas Rigorosas dos 8 Indicadores ---
-  public calculateDashboardKPIs(empresaId = DEMO_ORG_ID, filters?: Partial<FiltrosDashboard>): IndicadoresDashboard {
+  public calculateDashboardKPIs(empresaId = this.getActiveOrgId(), filters?: Partial<FiltrosDashboard>): IndicadoresDashboard {
     const cursosFiltrados = this.getCourses(empresaId, filters);
     const cursosIds = cursosFiltrados.map(c => c.id);
 
-    // 1. Total de Ações
     const totalAcoes = cursosFiltrados.length;
 
-    // 2. Formandos Avaliados Únicos & Taxa de Aprovação (com desduplicação por eAvaliacaoFinal)
     const avaliacoesFinais = this.db.avaliacoes.filter(
       a => a.empresaId === empresaId && cursosIds.includes(a.cursoId) && a.tipoAvaliacao === 'conhecimentos_formando' && a.eAvaliacaoFinal
     );
@@ -745,41 +1080,29 @@ class DataService {
     const aprovadosCount = avaliacoesFinais.filter(a => a.resultado === 'aprovado').length;
     const taxaAprovacao = formandosAvaliados > 0 ? Math.round((aprovadosCount / formandosAvaliados) * 100) : 0;
 
-    // 3. Satisfação Média (Escala 1 a 5)
     const avaliacoesSatisfacao = this.db.avaliacoes.filter(
       a => a.empresaId === empresaId && cursosIds.includes(a.cursoId) && a.tipoAvaliacao === 'satisfacao_formacao' && a.notaNumerica > 0
     );
-    const satisfacaoMedia = avaliacoesSatisfacao.length > 0
-      ? Number((avaliacoesSatisfacao.reduce((acc, curr) => acc + curr.notaNumerica, 0) / avaliacoesSatisfacao.length).toFixed(1))
-      : 0;
+    const somaNotasSatisfacao = avaliacoesSatisfacao.reduce((acc, a) => acc + a.notaNumerica, 0);
+    const satisfacaoMedia = avaliacoesSatisfacao.length > 0 ? Number((somaNotasSatisfacao / avaliacoesSatisfacao.length).toFixed(1)) : 0;
 
-    // 4. Avaliação de Formadores (Escala 1 a 5)
     const avaliacoesDocentes = this.db.avaliacoes.filter(
       a => a.empresaId === empresaId && cursosIds.includes(a.cursoId) && a.tipoAvaliacao === 'desempenho_formador' && a.notaNumerica > 0
     );
-    const avaliacaoFormadores = avaliacoesDocentes.length > 0
-      ? Number((avaliacoesDocentes.reduce((acc, curr) => acc + curr.notaNumerica, 0) / avaliacoesDocentes.length).toFixed(1))
-      : 0;
+    const somaNotasDocentes = avaliacoesDocentes.reduce((acc, a) => acc + a.notaNumerica, 0);
+    const avaliacaoFormadores = avaliacoesDocentes.length > 0 ? Number((somaNotasDocentes / avaliacoesDocentes.length).toFixed(1)) : 0;
 
-    // 5. Certificados Emitidos
     const certificadosEmitidos = this.db.certificados.filter(
       c => c.empresaId === empresaId && cursosIds.includes(c.cursoId) && c.estado === 'emitido'
     ).length;
 
-    // 6. Ocorrências (Cursos filtrados + gerais da org se filtro for 'Todos')
-    const ocorrencias = this.db.ocorrencias.filter(o => {
-      if (o.empresaId !== empresaId) return false;
-      if (o.cursoId) {
-        return cursosIds.includes(o.cursoId);
-      }
-      return (!filters?.cursoId || filters.cursoId === 'Todos');
-    }).length;
+    const ocorrenciasTotal = this.db.ocorrencias.filter(
+      o => o.empresaId === empresaId && (o.cursoId ? cursosIds.includes(o.cursoId) : true)
+    ).length;
 
-    // 7. Taxa de Recomendação (% de formandos que responderam Sim)
-    const respostasRecomendacao = avaliacoesSatisfacao.filter(a => a.recomendaria !== undefined);
-    const taxaRecomendacao = respostasRecomendacao.length > 0
-      ? Math.round((respostasRecomendacao.filter(a => a.recomendaria === true).length / respostasRecomendacao.length) * 100)
-      : 0;
+    const avaliacoesComRecomendacao = avaliacoesSatisfacao.filter(a => a.recomendaria !== undefined);
+    const recomendacoesSim = avaliacoesComRecomendacao.filter(a => a.recomendaria === true).length;
+    const taxaRecomendacao = avaliacoesComRecomendacao.length > 0 ? Math.round((recomendacoesSim / avaliacoesComRecomendacao.length) * 100) : 0;
 
     return {
       totalAcoes,
@@ -788,48 +1111,28 @@ class DataService {
       avaliacaoFormadores,
       formandosAvaliados,
       certificadosEmitidos,
-      ocorrenciasTotal: ocorrencias,
+      ocorrenciasTotal,
       taxaRecomendacao,
     };
   }
 
-  // Dados para Gráficos
-  public getMonthlyEvolution(empresaId = DEMO_ORG_ID, filters?: Partial<FiltrosDashboard>) {
-    const cursos = this.getCourses(empresaId, filters);
+  public getMonthlyEvolution(empresaId = this.getActiveOrgId(), filters?: Partial<FiltrosDashboard>) {
+    const cursosAno = this.getCourses(empresaId, filters);
     const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-    const contagens = new Array(12).fill(0);
-
-    cursos.forEach(c => {
-      const mesIdx = c.mes >= 1 && c.mes <= 12 ? c.mes - 1 : 0;
-      contagens[mesIdx]++;
+    return meses.map((mesNome, idx) => {
+      const mesNum = idx + 1;
+      const count = cursosAno.filter(c => c.mes === mesNum).length;
+      return { mes: mesNome, acoes: count };
     });
-
-    return meses.map((mes, idx) => ({
-      mes,
-      acoes: contagens[idx],
-    }));
   }
 
-  public getStatusDistribution(empresaId = DEMO_ORG_ID, filters?: Partial<FiltrosDashboard>) {
+  public getStatusDistribution(empresaId = this.getActiveOrgId(), filters?: Partial<FiltrosDashboard>) {
     const cursos = this.getCourses(empresaId, filters);
-    const counts = {
-      agendado: 0,
-      em_andamento: 0,
-      realizado: 0,
-      cancelado: 0,
-    };
-
-    cursos.forEach(c => {
-      if (counts[c.estadoCurso] !== undefined) {
-        counts[c.estadoCurso]++;
-      }
-    });
-
     return [
-      { nome: 'Agendado', valor: counts.agendado, cor: '#F59E0B' },
-      { nome: 'Em Andamento', valor: counts.em_andamento, cor: '#3B82F6' },
-      { nome: 'Realizado', valor: counts.realizado, cor: '#10B981' },
-      { nome: 'Cancelado', valor: counts.cancelado, cor: '#EF4444' },
+      { nome: 'Agendado', valor: cursos.filter(c => c.estadoCurso === 'agendado').length, cor: '#D99B24' },
+      { nome: 'Em Andamento', valor: cursos.filter(c => c.estadoCurso === 'em_andamento').length, cor: '#183B5B' },
+      { nome: 'Realizado', valor: cursos.filter(c => c.estadoCurso === 'realizado').length, cor: '#16866A' },
+      { nome: 'Cancelado', valor: cursos.filter(c => c.estadoCurso === 'cancelado').length, cor: '#D32F2F' },
     ];
   }
 }

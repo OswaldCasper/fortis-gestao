@@ -6,55 +6,102 @@
     --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
 
-    /* Cores Institucionais Padrão (Configuráveis) */
-    --fortis-primary: #C59B27;
-    --fortis-primary-hover: #B2881D;
-    --fortis-primary-light: #FBF6E7;
-    --fortis-primary-ring: rgba(197, 155, 39, 0.35);
+    /* Cores Base do Sistema FORTIS Enterprise */
+    --fortis-azul: #183B5B;
+    --fortis-dourado: #D99B24;
+    --fortis-verde: #16866A;
 
-    --fortis-secondary: #0F172A;
-    --fortis-secondary-hover: #1E293B;
-
-    --fortis-tertiary: #3B82F6;
-    --fortis-tertiary-hover: #2563EB;
-
-    --background: #F8FAFC;
+    /* Superfícies e Estrutura (Tema Claro) */
+    --background: #F4F6F9;
     --surface: #FFFFFF;
-    --surface-muted: #F1F5F9;
-    --border: #E2E8F0;
-    --border-subtle: #F1F5F9;
-    --text-primary: #0F172A;
-    --text-secondary: #475569;
-    --text-muted: #94A3B8;
+    --surface-muted: #F8FAFC;
+    --border: #E3E8EF;
+    --border-subtle: #EDF2F7;
+    --text-primary: #1B2A3A;
+    --text-secondary: #5B6B7C;
+    --text-muted: #8896A6;
+
+    /* Cores Semânticas com Variantes Suaves (Tema Claro) */
+    --color-success: #16866A;
+    --color-success-soft: #E8F5F1;
+    --color-warning: #D99B24;
+    --color-warning-soft: #FEF7EB;
+    --color-danger: #D32F2F;
+    --color-danger-soft: #FDF2F2;
+    --color-info: #183B5B;
+    --color-info-soft: #EFF6FF;
+
+    /* Tokens Dinâmicos da Organização (Sobrescritos por Empresa) */
+    --fortis-primary: #183B5B;
+    --fortis-primary-hover: #122B43;
+    --fortis-primary-soft: rgba(24, 59, 91, 0.08);
+    --fortis-primary-ring: rgba(24, 59, 91, 0.25);
+
+    --fortis-secondary: #D99B24;
+    --fortis-secondary-hover: #C2871B;
+    --fortis-secondary-soft: rgba(217, 155, 36, 0.12);
+
+    --fortis-tertiary: #16866A;
+    --fortis-tertiary-hover: #106752;
+    --fortis-tertiary-soft: rgba(22, 134, 106, 0.10);
   }
 
   .dark {
-    --fortis-primary-light: #2A2312;
-    --background: #090D16;
-    --surface: #0F172A;
-    --surface-muted: #1E293B;
-    --border: #1E293B;
-    --border-subtle: #141E33;
-    --text-primary: #F8FAFC;
+    /* Superfícies e Estrutura (Tema Escuro - Alto Contraste AA) */
+    --background: #0B111B;
+    --surface: #152232;
+    --surface-muted: #1B2B3E;
+    --border: #223347;
+    --border-subtle: #192739;
+    --text-primary: #F1F5F9;
     --text-secondary: #94A3B8;
     --text-muted: #64748B;
+
+    /* Cores Semânticas com Variantes Suaves (Tema Escuro) */
+    --color-success: #20A785;
+    --color-success-soft: #0C3328;
+    --color-warning: #E8AA35;
+    --color-warning-soft: #382808;
+    --color-danger: #EF4444;
+    --color-danger-soft: #381414;
+    --color-info: #3B82F6;
+    --color-info-soft: #122645;
+
+    /* Tokens Dinâmicos da Organização em Modo Escuro */
+    --fortis-primary-soft: rgba(24, 59, 91, 0.25);
+    --fortis-secondary-soft: rgba(217, 155, 36, 0.22);
+    --fortis-tertiary-soft: rgba(22, 134, 106, 0.22);
   }
 
   body {
     font-family: var(--font-sans);
     background-color: var(--background);
     color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 }
 
-/* Tabular figures for data, timestamps and metrics */
+/* Tipografia e Numeração Tabular */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
 
-/* Custom scrollbars */
+/* Padrões do Design System FORTIS */
+.fortis-card {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04);
+}
+
+.fortis-control {
+  border-radius: 8px;
+}
+
+/* Scrollbars personalizados suaves */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

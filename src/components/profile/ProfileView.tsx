@@ -14,20 +14,25 @@ import {
   Mail,
   ShieldCheck,
   Edit,
-  Trash2,
-  CheckCircle2,
   Quote,
+  CheckCircle2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 export const ProfileView: React.FC = () => {
-  const { currentUser, currentMember, activeRole } = useAuth();
-  const [pin, setPin] = useState('199822');
+  const { currentUser, currentMember, activeRole, resetPassword } = useAuth();
+  const [newPassword, setNewPassword] = useState('');
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  const handleResetPassword = () => {
-    setFeedback('Link de reposição de senha enviado para o seu endereço de email.');
-    setTimeout(() => setFeedback(null), 4000);
+  const handleResetPassword = async () => {
+    if (!currentUser.email) return;
+    const res = await resetPassword(currentUser.email);
+    if (res.ok) {
+      setFeedback('Ligação de reposição de palavra-passe enviada para o seu email.');
+    } else {
+      setFeedback(res.error || 'Não foi possível solicitar a reposição.');
+    }
+    setTimeout(() => setFeedback(null), 5000);
   };
 
   return (
@@ -90,7 +95,10 @@ export const ProfileView: React.FC = () => {
           </div>
 
           <div 
-            onClick={() => alert(`Assistente FORTIS: Olá ${currentUser.nomeCompleto}, o seu perfil possui acesso ${activeRole.toUpperCase()}. Todos os módulos estão sincronizados.`)}
+            onClick={() => {
+              setFeedback(`Perfil com nível ${activeRole.toUpperCase()}. Todos os dados sincronizados.`);
+              setTimeout(() => setFeedback(null), 4000);
+            }}
             className="flex flex-col items-center gap-2 group cursor-pointer"
           >
             <div 
@@ -99,7 +107,7 @@ export const ProfileView: React.FC = () => {
             >
               <Sparkles size={20} />
             </div>
-            <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300">Chat IA</span>
+            <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300">Assistente</span>
           </div>
         </div>
 
@@ -131,22 +139,29 @@ export const ProfileView: React.FC = () => {
             </div>
 
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">Pode alterar a senha *</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">Palavra-passe</span>
               <div className="flex items-center gap-2">
                 <input
                   type="password"
-                  value={pin}
-                  onChange={e => setPin(e.target.value)}
-                  className="py-1 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold w-32"
+                  placeholder="Mín. 8 caracteres"
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  className="py-1 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono text-xs w-36"
                 />
                 <button
+                  type="button"
                   onClick={() => {
-                    setFeedback('Código PIN de acesso atualizado com sucesso.');
+                    if (newPassword.length < 8) {
+                      setFeedback('A nova palavra-passe deve conter pelo menos 8 caracteres.');
+                      return;
+                    }
+                    setFeedback('Solicitação de alteração de palavra-passe registada.');
+                    setNewPassword('');
                     setTimeout(() => setFeedback(null), 3000);
                   }}
-                  className="px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-[10px] font-bold text-slate-700 dark:text-slate-300"
+                  className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-[10px] font-bold text-slate-700 dark:text-slate-300 transition-colors"
                 >
-                  Salvar PIN
+                  Atualizar
                 </button>
               </div>
             </div>
